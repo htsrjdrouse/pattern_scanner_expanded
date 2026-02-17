@@ -1424,7 +1424,7 @@ def check_breakout_criteria(df, pattern, asc_triangle=None, bull_flag=None):
 # UNIFIED CHART GENERATION
 # ════════════════════════════════════════════════════════════════
 
-def generate_unified_chart(symbol, df, pattern, asc_triangle, bull_flag, double_bottom, buy_point, show_smas=None, show_cto=False):
+def generate_unified_chart(symbol, df, pattern, asc_triangle, bull_flag, double_bottom, buy_point, show_smas=None, show_cto=False, show_supertrend=False, show_smc=False):
     """Generate single chart with all patterns overlaid + volume.
 
     Args:
@@ -1495,6 +1495,171 @@ def generate_unified_chart(symbol, df, pattern, asc_triangle, bull_flag, double_
                 cto1 >= cto2), color='yellow', alpha=0.3)
             ax1.fill_between(df.index, cto1, cto2, where=(
                 cto1 < cto2), color='blue', alpha=0.3)
+
+    # Add SuperTrend if requested
+    if show_supertrend:
+        supertrend_df = ta.supertrend(df['High'], df['Low'], df['Close'], length=10, multiplier=3.0)
+        if supertrend_df is not None and not supertrend_df.empty:
+            supertrend = supertrend_df['SUPERT_10_3.0']
+            direction = supertrend_df['SUPERTd_10_3.0']  # 1 for up, -1 for down
+            # Plot SuperTrend line with color based on trend
+            colors = ['green' if d == 1 else 'red' for d in direction]
+            # To plot with changing colors, use segments
+            current_color = None
+            start_idx = 0
+            for i in range(len(df)):
+                if pd.isna(supertrend.iloc[i]):
+                    continue
+                color = colors[i]
+                if color != current_color:
+                    if current_color is not None and start_idx < i:
+                        ax1.plot(df.index[start_idx:i], supertrend.iloc[start_idx:i], color=current_color, linewidth=1.5, alpha=0.8)
+                    current_color = color
+                    start_idx = i
+            # Last segment
+            if start_idx < len(df):
+                ax1.plot(df.index[start_idx:], supertrend.iloc[start_idx:], color=current_color, linewidth=1.5, alpha=0.8, label='SuperTrend')
+
+            # Highlight trend direction
+            ax1.fill_between(df.index, df['Low'].min(), df['High'].max(), where=(direction == 1), color='green', alpha=0.05, label='Uptrend')
+            ax1.fill_between(df.index, df['Low'].min(), df['High'].max(), where=(direction == -1), color='red', alpha=0.05, label='Downtrend')
+
+            # Add signals on trend changes
+            for i in range(1, len(direction)):
+                if direction.iloc[i] != direction.iloc[i-1]:
+                    if direction.iloc[i] == 1:  # Buy signal
+                        ax1.scatter([df.index[i]], [supertrend.iloc[i]], color='lime', marker='^', s=80, zorder=10, edgecolors='black', linewidths=1)
+                    else:  # Sell signal
+                        ax1.scatter([df.index[i]], [supertrend.iloc[i]], color='red', marker='v', s=80, zorder=10, edgecolors='black', linewidths=1)
+
+    # Add SMC if requested
+    if show_smc:
+        # Calculate pivot points for market structure
+        window = 5  # Lookback for pivots
+        df['Pivot_High'] = df['High'][argrelextrema(df['High'].values, comparator=np.greater, order=window)[0]]
+        df['Pivot_Low'] = df['Low'][argrelextrema(df['Low'].values, comparator=np.less, order=window)[0]]
+
+        # Market Structure: BOS and CHoCH
+        bullish_bos = []
+        bearish_bos = []
+        choch = []
+
+        for i in range(window, len(df)):
+            # Bullish BOS: Break above previous pivot high
+            if not pd.isna(df['Pivot_High'].iloc[i-window]) and df['High'].iloc[i] > df['Pivot_High'].iloc[i-window]:
+                bullish_bos.append((df.index[i], df['High'].iloc[i]))
+
+            # Bearish BOS: Break below previous pivot low
+            if not pd.isna(df['Pivot_Low'].iloc[i-window]) and df['Low'].iloc[i] < df['Pivot_Low'].iloc[i-window]:
+                bearish_bos.append((df.index[i], df['Low'].iloc[i]))
+
+            # CHoCH: Change of character (direction change)
+            if i > window*2:
+                prev_highs = df['Pivot_High'].iloc[i-window*2:i-window].dropna()
+                prev_lows = df['Pivot_Low'].iloc[i-window*2:i-window].dropna()
+                if len(prev_highs) > 1 and len(prev_lows) > 1:
+                    if prev_highs.iloc[-1] < prev_highs.iloc[-2] and prev_lows.iloc[-1] > prev_lows.iloc[-2]:
+                        choch.append((df.index[i], df['Close'].iloc[i]))
+
+        # Plot BOS
+        if bullish_bos:
+            bos_x, bos_y = zip(*bullish_bos)
+            ax1.scatter(bos_x, bos_y, color='#ff00ff', marker='^', s=100, zorder=10, label='Bullish BOS')
+
+        if bearish_bos:
+            bos_x, bos_y = zip(*bearish_bos)
+            ax1.scatter(bos_x, bos_y, color='#00ffff', marker='v', s=100, zorder=10, label='Bearish BOS')
+
+        # Plot CHoCH
+        if choch:
+            choch_x, choch_y = zip(*choch)
+            ax1.scatter(choch_x, choch_y, color='#ffff00', marker='o', s=100, zorder=10, label='CHoCH')
+
+        # Order Blocks: Simplified - high volume candles with strong move
+        df['Body'] = abs(df['Close'] - df['Open'])
+        avg_volume = df['Volume'].rolling(20).mean()
+        avg_body = df['Body'].rolling(20).mean()
+
+        bullish_ob = []
+        bearish_ob = []
+
+        for i in range(len(df)):
+            if df['Volume'].iloc[i] > avg_volume.iloc[i] * 1.5 and df['Body'].iloc[i] > avg_body.iloc[i] * 1.5:
+                if df['Close'].iloc[i] > df['Open'].iloc[i]:  # Bullish candle
+                    # Bullish OB: Bottom of the candle
+                    bullish_ob.append((df.index[i], df['Low'].iloc[i], df['High'].iloc[i]))
+                else:  # Bearish candle
+                    # Bearish OB: Top of the candle
+                    bearish_ob.append((df.index[i], df['Low'].iloc[i], df['High'].iloc[i]))
+
+        # Plot Order Blocks as boxes
+        for idx, low, high in bullish_ob:
+            ax1.add_patch(plt.Rectangle((idx - pd.Timedelta(days=1), low), width=pd.Timedelta(days=2), height=high-low,
+                                        color='#00ff00', alpha=0.3, zorder=5))
+
+        for idx, low, high in bearish_ob:
+            ax1.add_patch(plt.Rectangle((idx - pd.Timedelta(days=1), low), width=pd.Timedelta(days=2), height=high-low,
+                                        color='#ff0000', alpha=0.3, zorder=5))
+
+        # Fair Value Gaps: Gaps between candles
+        fvgs = []
+        for i in range(1, len(df)):
+            prev_high = df['High'].iloc[i-1]
+            prev_low = df['Low'].iloc[i-1]
+            curr_high = df['High'].iloc[i]
+            curr_low = df['Low'].iloc[i]
+
+            if curr_low > prev_high:  # Bullish FVG
+                fvgs.append((df.index[i-1], prev_high, curr_low))
+            elif curr_high < prev_low:  # Bearish FVG
+                fvgs.append((df.index[i-1], curr_high, prev_low))
+
+        # Plot FVGs as yellow boxes
+        for idx, bottom, top in fvgs:
+            ax1.add_patch(plt.Rectangle((idx, bottom), width=pd.Timedelta(days=1), height=top-bottom,
+                                        color='#ffff00', alpha=0.2, zorder=5))
+
+        # Equal Highs/Lows: Levels with multiple touches
+        tolerance = df['High'].std() * 0.01  # 1% tolerance
+
+        high_levels = {}
+        low_levels = {}
+
+        for i in range(len(df)):
+            high = df['High'].iloc[i]
+            low = df['Low'].iloc[i]
+
+            # Check for equal highs
+            for level in high_levels:
+                if abs(high - level) <= tolerance:
+                    high_levels[level].append(i)
+                    break
+            else:
+                high_levels[high] = [i]
+
+            # Check for equal lows
+            for level in low_levels:
+                if abs(low - level) <= tolerance:
+                    low_levels[level].append(i)
+                    break
+            else:
+                low_levels[low] = [i]
+
+        # Plot levels with 3+ touches
+        for level, indices in high_levels.items():
+            if len(indices) >= 3:
+                ax1.axhline(y=level, color='#ffa500', linestyle='--', alpha=0.7, linewidth=1)
+
+        for level, indices in low_levels.items():
+            if len(indices) >= 3:
+                ax1.axhline(y=level, color='#ffa500', linestyle='--', alpha=0.7, linewidth=1)
+
+        # Premium/Discount Zones: Based on VWAP
+        df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
+
+        # Shade premium (above VWAP) and discount (below VWAP)
+        ax1.fill_between(df.index, df['VWAP'], df['High'], where=(df['Close'] > df['VWAP']), color='green', alpha=0.1)
+        ax1.fill_between(df.index, df['Low'], df['VWAP'], where=(df['Close'] < df['VWAP']), color='red', alpha=0.1)
 
     # Plot other detected patterns
     if asc_triangle and 'resistance' in asc_triangle:
@@ -2089,6 +2254,12 @@ def chart(symbol):
         # Parse CTO parameter
         show_cto = request.args.get('cto') == '1'
 
+        # Parse SuperTrend parameter
+        show_supertrend = request.args.get('supertrend') == '1'
+
+        # Parse SMC parameter
+        show_smc = request.args.get('smc') == '1'
+
         # Parse EDGAR parameter
         show_edgar = request.args.get('edgar') == '1'
 
@@ -2179,7 +2350,7 @@ def chart(symbol):
         # Generate unified chart with SMA toggle
         # Pass df which now has pre-calculated SMAs
         chart_base64 = generate_unified_chart(
-            symbol, df, cup_pattern, asc_triangle, bull_flag, double_bottom, buy_point, show_smas=show_smas, show_cto=show_cto)
+            symbol, df, cup_pattern, asc_triangle, bull_flag, double_bottom, buy_point, show_smas=show_smas, show_cto=show_cto, show_supertrend=show_supertrend, show_smc=show_smc)
 
         html = """
         <html>
@@ -2257,17 +2428,21 @@ def chart(symbol):
             
             <!-- SMA Toggle Controls -->
             <div class="card" style="margin-bottom: 15px; padding: 15px;">
-                <strong>📈 Moving Averages:</strong>
-                <a class="btn" style="padding: 5px 12px; font-size: 12px; {% if show_smas == [50, 200] %}background: #00c853;{% endif %}" 
+                <strong>📈 Indicators:</strong>
+                <a class="btn" style="padding: 5px 12px; font-size: 12px; {% if show_smas == [50, 200] %}background: #00c853;{% endif %}"
                    href="/chart/{{ symbol }}?sma=50,200">50 & 200</a>
-                <a class="btn" style="padding: 5px 12px; font-size: 12px; {% if 13 in show_smas and 26 in show_smas %}background: #00c853;{% endif %}" 
+                <a class="btn" style="padding: 5px 12px; font-size: 12px; {% if 13 in show_smas and 26 in show_smas %}background: #00c853;{% endif %}"
                    href="/chart/{{ symbol }}?sma=all">All (13,26,40,50,200)</a>
-                <a class="btn" style="padding: 5px 12px; font-size: 12px;" 
+                <a class="btn" style="padding: 5px 12px; font-size: 12px;"
                    href="/chart/{{ symbol }}?sma=13,26,50">Short-term (13,26,50)</a>
                 <a class="btn" style="padding: 5px 12px; font-size: 12px;"
                    href="/chart/{{ symbol }}?sma=none">None</a>
                 <a class="btn" style="padding: 5px 12px; font-size: 12px; {% if show_cto %}background: #00c853;{% endif %}"
                    href="/chart/{{ symbol }}?cto=1&sma={{ show_smas|join(',') }}">CTO Larsson</a>
+                <a class="btn" style="padding: 5px 12px; font-size: 12px; {% if show_supertrend %}background: #00c853;{% endif %}"
+                   href="/chart/{{ symbol }}?supertrend=1&sma={{ show_smas|join(',') }}">SuperTrend</a>
+                <a class="btn" style="padding: 5px 12px; font-size: 12px; {% if show_smc %}background: #00c853;{% endif %}"
+                   href="/chart/{{ symbol }}?smc=1&sma={{ show_smas|join(',') }}">SMC</a>
                 <span style="color: #888; font-size: 12px; margin-left: 10px;">
                     Currently showing: {% if show_smas %}{{ show_smas|join(', ') }}{% else %}None{% endif %}
                 </span>
@@ -2284,6 +2459,15 @@ def chart(symbol):
                 {% if 50 in show_smas %}<div class="legend-item"><div class="legend-color" style="background: #4d96ff;"></div> SMA 50</div>{% endif %}
                 {% if 200 in show_smas %}<div class="legend-item"><div class="legend-color" style="background: #ff8c00;"></div> SMA 200</div>{% endif %}
                 {% if 50 in show_smas and 200 in show_smas %}<div class="legend-item"><div class="legend-color" style="background: gold;"></div> ⭐ Golden Cross (50>200)</div>{% endif %}
+                {% if show_supertrend %}<div class="legend-item"><div class="legend-color" style="background: green;"></div> SuperTrend Up</div>
+                <div class="legend-item"><div class="legend-color" style="background: red;"></div> SuperTrend Down</div>
+                <div class="legend-item"><span style="color: lime;">▲</span> ST Buy</div>
+                <div class="legend-item"><span style="color: red;">▼</span> ST Sell</div>{% endif %}
+                {% if show_smc %}<div class="legend-item"><div class="legend-color" style="background: #00ff00;"></div> Bullish OB</div>
+                <div class="legend-item"><div class="legend-color" style="background: #ff0000;"></div> Bearish OB</div>
+                <div class="legend-item"><div class="legend-color" style="background: #ffff00;"></div> FVG</div>
+                <div class="legend-item"><span style="color: #ff00ff;">↗</span> BOS</div>
+                <div class="legend-item"><span style="color: #00ffff;">↘</span> CHoCH</div>{% endif %}
                 <div class="legend-item"><div class="legend-color" style="background: lime;"></div> Cup & Handle</div>
                 <div class="legend-item"><div class="legend-color" style="background: magenta;"></div> Ascending Triangle</div>
                 <div class="legend-item"><div class="legend-color" style="background: #ff9800;"></div> Bull Flag</div>
@@ -2673,6 +2857,9 @@ def chart(symbol):
                                       analysis=analysis,
                                       dcf_data=dcf_data,
                                       show_smas=show_smas,
+                                      show_cto=show_cto,
+                                      show_supertrend=show_supertrend,
+                                      show_smc=show_smc,
                                       options=options_strategy,
                                       options_budget=options_budget,
                                       edgar_financials=edgar_financials)

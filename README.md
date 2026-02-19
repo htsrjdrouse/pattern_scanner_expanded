@@ -34,13 +34,12 @@ A Flask-based stock pattern scanner that detects bullish patterns (Cup & Handle,
 - Docker and Docker Compose
 - Python 3.12 (for local development)
 
-### Quick Start with Docker
-```bash
-git clone <your-repo-url>
-cd pattern_scanner_kiro_grokfixed
-docker compose up -d --build
-```
 Access at http://localhost:5002
+
+### Quick Start with Docker
+git clone <your-repo-url>
+cd pattern_scanner_extended
+docker compose up -d --build
 
 ### Local Development
 ```bash

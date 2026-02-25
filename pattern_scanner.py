@@ -10,7 +10,7 @@ import base64
 from io import BytesIO
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-from flask import Flask, render_template_string, request, Response
+from flask import Flask, render_template_string, request, Response, flash, redirect
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
@@ -23,7 +23,24 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
 
+import json
+import os
+
 app = Flask(__name__)
+app.secret_key = 'your-unique-secret-key-here-change-in-production'  # Required for sessions/flash
+
+TRACKED_FILE = '/app/data/tracked_stocks.json'
+
+def load_tracked_stocks():
+    if os.path.exists(TRACKED_FILE):
+        with open(TRACKED_FILE, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_tracked_stocks(stocks):
+    os.makedirs(os.path.dirname(TRACKED_FILE), exist_ok=True)
+    with open(TRACKED_FILE, 'w') as f:
+        json.dump(stocks, f, indent=2, default=str)
 
 # ════════════════════════════════════════════════════════════════
 # TICKER FETCHING FUNCTIONS
@@ -1967,6 +1984,9 @@ def home():
             body { font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; background: #1a1a2e; color: #eee; }
             h1 { color: #00d4ff; }
             .container { max-width: 1000px; margin: auto; }
+            .navbar { background: #16213e; padding: 10px; border-radius: 8px; margin-bottom: 20px; }
+            .navbar a { color: #00d4ff; text-decoration: none; margin: 0 15px; }
+            .navbar a:hover { text-decoration: underline; }
             .btn { padding: 15px 30px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                    color: white; text-decoration: none; border-radius: 8px; margin: 10px;
                    display: inline-block; font-weight: bold; transition: transform 0.2s; }
@@ -1978,12 +1998,16 @@ def home():
             ul { line-height: 1.8; }
             .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
             .time-note { color: #888; font-size: 12px; margin-left: 10px; }
-            .new-badge { background: #00c853; color: #000; padding: 2px 8px; border-radius: 4px; 
+            .new-badge { background: #00c853; color: #000; padding: 2px 8px; border-radius: 4px;
                         font-size: 10px; margin-left: 5px; }
         </style>
     </head>
     <body>
     <div class="container">
+        <div class="navbar">
+            <a href="/">Home</a>
+            <a href="/tracked">Tracked Stocks</a>
+        </div>
         <h1>🏆 Stock Pattern Scanner <span class="new-badge">ENHANCED</span></h1>
         <p>Multi-pattern detection with DCF valuation and advanced charting.</p>
 
@@ -2083,6 +2107,9 @@ def scan():
             body { font-family: 'Segoe UI', Arial, sans-serif; margin: 20px; background: #1a1a2e; color: #eee; }
             h1 { color: #00d4ff; }
             .container { max-width: 100%; margin: auto; overflow-x: auto; }
+            .navbar { background: #16213e; padding: 10px; border-radius: 8px; margin-bottom: 20px; }
+            .navbar a { color: #00d4ff; text-decoration: none; margin: 0 15px; }
+            .navbar a:hover { text-decoration: underline; }
             table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 12px; }
             th, td { border: 1px solid #333; padding: 8px; text-align: center; white-space: nowrap; }
             th { background: #16213e; color: #00d4ff; position: sticky; top: 0; }
@@ -2115,6 +2142,10 @@ def scan():
     </head>
     <body>
     <div class="container">
+        <div class="navbar">
+            <a href="/">Home</a>
+            <a href="/tracked">Tracked Stocks</a>
+        </div>
         <h1>🏆 Stock Pattern Scanner Scan Results</h1>
         <p><strong>Market:</strong> {{ market_name }} | <strong>Pattern:</strong> All Patterns | 
            <strong>Scanned:</strong> {{ now }} | <strong>Found:</strong> {{ results|length }} patterns</p>
@@ -2408,12 +2439,29 @@ def chart(symbol):
                                font-size: 12px; display: flex; gap: 20px; flex-wrap: wrap; }
                 .legend-item { display: flex; align-items: center; gap: 5px; }
                 .legend-color { width: 20px; height: 3px; }
+                .navbar { background: #16213e; padding: 10px; border-radius: 8px; margin-bottom: 20px; }
+                .navbar a { color: #00d4ff; text-decoration: none; margin: 0 15px; }
+                .navbar a:hover { text-decoration: underline; }
+                .track-form { background: #16213e; padding: 15px; border-radius: 8px; margin: 20px 0; }
+                .track-form input, .track-form button { padding: 8px; margin: 5px; border-radius: 4px; border: none; }
+                .track-form input { background: #0f0f23; color: #fff; }
+                .track-form button { background: #00c853; color: #000; cursor: pointer; }
             </style>
         </head>
         <body>
         <div class="container">
-            <p><a class="btn" href="javascript:history.back()">← Back to Results</a> 
-               <a class="btn" href="/">Home</a></p>
+            <div class="navbar">
+                <a href="/">Home</a>
+                <a href="/tracked">Tracked Stocks</a>
+            </div>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div style="padding: 10px; border-radius: 5px; margin: 10px 0; {% if category == 'success' %}background: #00c853; color: #000;{% else %}background: #f44336;{% endif %}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            <p><a class="btn" href="javascript:history.back()">← Back to Results</a></p>
             
             <!-- Company Header -->
             <div class="company-header">
@@ -2473,7 +2521,29 @@ def chart(symbol):
                 <div class="legend-item"><div class="legend-color" style="background: #ff9800;"></div> Bull Flag</div>
                 <div class="legend-item"><div class="legend-color" style="background: #00ff00; height: 3px;"></div> Buy Point</div>
             </div>
-            
+
+            <!-- Track Stock Form -->
+            {% if analysis %}
+            <div class="track-form">
+                <h3>📈 Track This Stock</h3>
+                <form action="/track" method="post">
+                    <input type="hidden" name="ticker" value="{{ symbol }}">
+                    <input type="hidden" name="buy_point" value="{{ analysis.buy_point }}">
+                    <input type="hidden" name="rsi_min" value="50">
+                    <input type="hidden" name="rsi_max" value="70">
+                    <input type="hidden" name="volume_multiple" value="2.0">
+                    <input type="hidden" name="breakeven_move" value="{% if options.breakeven_move_pct %}{{ options.breakeven_move_pct|round(1) }}{% elif cup_pattern %}{{ cup_pattern.cup_depth_pct|round(1) }}{% else %}0{% endif %}">
+                    <label for="email">Email (required): </label>
+                    <input type="email" name="email" id="email" required placeholder="your@email.com" value="{{ analysis.email if analysis.email else '' }}">
+                    <button type="submit">Start Tracking</button>
+                </form>
+                <p style="font-size: 12px; color: #888; margin-top: 10px;">
+                    Will track for breakout above ${{ analysis.buy_point }}, RSI 50-70, 2x volume, and email alerts.
+                    Breakeven move: {% if options.breakeven_move_pct %}{{ options.breakeven_move_pct|round(1) }}%{% elif cup_pattern %}{{ cup_pattern.cup_depth_pct|round(1) }}% (cup depth){% else %}0%{% endif %}.
+                </p>
+            </div>
+            {% endif %}
+
             <div class="grid">
                 <!-- Breakout Criteria -->
                 <div class="card">
@@ -2868,6 +2938,180 @@ def chart(symbol):
         import traceback
         return f"Error generating chart for {symbol}: {e}<br><pre>{traceback.format_exc()}</pre>"
 
+@app.route('/track', methods=['POST'])
+def track_stock():
+    try:
+        ticker = request.form.get('ticker', '').strip().upper()
+        email = request.form.get('email', '').strip()
+        buy_point = request.form.get('buy_point')
+        rsi_min = request.form.get('rsi_min', 50.0)
+        rsi_max = request.form.get('rsi_max', 70.0)
+        volume_multiple = request.form.get('volume_multiple', 2.0)
+        breakeven_move = request.form.get('breakeven_move')
+
+        # Validation
+        if not ticker or not email:
+            flash('Ticker and email are required.', 'error')
+            return redirect(request.referrer or '/')
+
+        if not buy_point:
+            flash('Buy point is required.', 'error')
+            return redirect(request.referrer or '/')
+
+        try:
+            buy_point = float(buy_point)
+            rsi_min = float(rsi_min)
+            rsi_max = float(rsi_max)
+            volume_multiple = float(volume_multiple)
+            breakeven_move = float(breakeven_move) if breakeven_move else None
+        except ValueError:
+            flash('Invalid numeric values.', 'error')
+            return redirect(request.referrer or '/')
+
+        # Load existing
+        stocks = load_tracked_stocks()
+
+        # Check if already tracked
+        if any(s['ticker'] == ticker for s in stocks):
+            flash(f'{ticker} is already being tracked.', 'error')
+            return redirect(request.referrer or '/')
+
+        # Add new
+        new_stock = {
+            'ticker': ticker,
+            'buy_point': buy_point,
+            'rsi_min': rsi_min,
+            'rsi_max': rsi_max,
+            'volume_multiple': volume_multiple,
+            'breakeven_move': breakeven_move,
+            'email': email,
+            'added_at': datetime.utcnow().isoformat(),
+            'notified': False
+        }
+        stocks.append(new_stock)
+        save_tracked_stocks(stocks)
+
+        flash(f'Successfully started tracking {ticker}.', 'success')
+        return redirect('/tracked')
+
+    except Exception as e:
+        flash(f'Error tracking stock: {str(e)}', 'error')
+        return redirect(request.referrer or '/')
+
+@app.route('/tracked')
+def tracked():
+    try:
+        stocks = load_tracked_stocks()
+        # Sort by added_at desc
+        stocks.sort(key=lambda x: x['added_at'], reverse=True)
+        # Fetch current metrics for each
+        for stock in stocks:
+            try:
+                ticker = yf.Ticker(stock['ticker'])
+                hist = ticker.history(period='60d')
+                if not hist.empty:
+                    stock['current_price'] = round(hist['Close'].iloc[-1], 2)
+                    stock['current_rsi'] = round(ta.rsi(hist['Close'], length=14).iloc[-1], 1) if len(hist) > 14 else None
+                    stock['avg_volume'] = int(hist['Volume'].tail(50).mean())
+                else:
+                    stock['current_price'] = None
+                    stock['current_rsi'] = None
+                    stock['avg_volume'] = None
+            except Exception as e:
+                stock['current_price'] = None
+                stock['current_rsi'] = None
+                stock['avg_volume'] = None
+        html = """
+        <html>
+        <head>
+            <title>Tracked Stocks</title>
+            <style>
+                body { font-family: 'Segoe UI', Arial, sans-serif; margin: 20px; background: #1a1a2e; color: #eee; }
+                h1 { color: #00d4ff; }
+                .container { max-width: 1200px; margin: auto; }
+                table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 14px; }
+                th, td { border: 1px solid #333; padding: 10px; text-align: center; }
+                th { background: #16213e; color: #00d4ff; }
+                tr:nth-child(even) { background: #0f0f23; }
+                tr:hover { background: #1f1f3a; }
+                .btn { padding: 8px 15px; background: #667eea; color: white; text-decoration: none; border-radius: 5px; margin: 5px; display: inline-block; }
+                .btn-danger { background: #f44336; }
+                .btn:hover { opacity: 0.8; }
+                .navbar { background: #16213e; padding: 10px; border-radius: 8px; margin-bottom: 20px; }
+                .navbar a { color: #00d4ff; text-decoration: none; margin: 0 15px; }
+                .navbar a:hover { text-decoration: underline; }
+                .flash { padding: 10px; border-radius: 5px; margin: 10px 0; }
+                .flash-success { background: #00c853; color: #000; }
+                .flash-error { background: #f44336; }
+                .status { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+                .status-active { background: #00c853; color: #000; }
+                .status-inactive { background: #f44336; }
+            </style>
+        </head>
+        <body>
+        <div class="container">
+            <div class="navbar">
+                <a href="/">Home</a>
+                <a href="/tracked">Tracked Stocks</a>
+            </div>
+            <h1>📈 Tracked Stocks</h1>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="flash flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            {% if tracks %}
+            <table>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Buy Point</th>
+                    <th>RSI Range</th>
+                    <th>Volume Req</th>
+                    <th>Breakeven %</th>
+                    <th>Added Date</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+                {% for track in tracks %}
+                <tr>
+                    <td><a href="/chart/{{ track['ticker'] }}" style="color: #00d4ff;">{{ track['ticker'] }}</a></td>
+                    <td>${{ track['buy_point'] }}{% if track['current_price'] %}<br><small style="color:#888;">(Curr: ${{ track['current_price'] }})</small>{% endif %}</td>
+                    <td>{{ track['rsi_min'] }}-{{ track['rsi_max'] }}{% if track['current_rsi'] %}<br><small style="color:#888;">(Curr: {{ track['current_rsi'] }})</small>{% endif %}</td>
+                    <td>{{ track['volume_multiple'] }}x{% if track['avg_volume'] %}<br><small style="color:#888;">(Avg: {{ track['avg_volume']|round(0) }} req: {{ (track['avg_volume'] * track['volume_multiple']) |round(0) }})</small>{% endif %}</td>
+                    <td>{% if track['breakeven_move'] %}{{ track['breakeven_move'] }}%{% else %}-{% endif %}</td>
+                    <td>{{ track['added_at'][:10] }}</td>
+                    <td><span class="status status-active">Active</span></td>
+                    <td>
+                        <form method="post" action="/tracked/{{ track['ticker'] }}/delete" style="display: inline;">
+                            <button type="submit" class="btn btn-danger" onclick="return confirm('Remove {{ track['ticker'] }} from tracking?')">Remove</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% else %}
+            <p>No stocks are currently being tracked. <a href="/" class="btn">Start Tracking</a></p>
+            {% endif %}
+        </div>
+        </body>
+        </html>
+        """
+        return render_template_string(html, tracks=stocks)
+    except Exception as e:
+        return f"Error loading tracked stocks: {e}"
+
+@app.route('/tracked/<ticker>/delete', methods=['POST'])
+def remove_tracked(ticker):
+    try:
+        stocks = load_tracked_stocks()
+        stocks = [s for s in stocks if s['ticker'] != ticker.upper()]
+        save_tracked_stocks(stocks)
+        flash(f'Removed {ticker.upper()} from tracking.', 'success')
+    except Exception as e:
+        flash(f'Error removing stock: {str(e)}', 'error')
+    return redirect('/tracked')
 
 if __name__ == "__main__":
     # Disable reloader to prevent crashes during long scans

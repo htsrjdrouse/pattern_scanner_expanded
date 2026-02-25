@@ -1,0 +1,57 @@
+[
+  {
+    "ticker": "TSLA",
+    "buy_point": 449.81,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": 21.5,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-20T18:58:45.366525",
+    "notified": false
+  },
+  {
+    "ticker": "CHRD",
+    "buy_point": 101.08,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": -3.8,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-23T14:16:43.159259",
+    "notified": false
+  },
+  {
+    "ticker": "HALO",
+    "buy_point": 81.31,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": 4.7,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-23T15:17:28.748210",
+    "notified": false
+  },
+  {
+    "ticker": "BMRN",
+    "buy_point": 61.37,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": -3.0,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-24T15:13:27.848919",
+    "notified": false
+  },
+  {
+    "ticker": "FSM",
+    "buy_point": 10.13,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": 16.6,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-24T17:45:39.897613",
+    "notified": false
+  }
+]

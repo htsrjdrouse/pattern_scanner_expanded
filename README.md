@@ -1,6 +1,8 @@
-# Pattern Scanner
+# Pattern Scanner & Alpha Research Platform
 
 A Flask-based stock pattern scanner that detects bullish patterns (Cup & Handle, Double Bottoms, Ascending Triangles, Bull Flags) with advanced charting, technical analysis, DCF valuation, and options strategies.
+
+**NEW**: Modular alpha research platform for systematic signal backtesting, IC analysis, signal combination, and regime detection.
 
 ## Features
 
@@ -28,6 +30,17 @@ A Flask-based stock pattern scanner that detects bullish patterns (Cup & Handle,
 - Stock search and detailed analysis pages
 - Chart toggles for SMAs and CTO lines
 
+### Alpha Research Platform 🆕
+- **Signal Framework**: Standardized signal abstraction with 11+ built-in signals
+- **Backtesting Engine**: IC, hit rate, Sharpe ratio, quantile analysis
+- **Decay Analysis**: Signal predictive power across multiple horizons
+- **Correlation Analysis**: Identify redundant and diversifying signals
+- **Signal Combination**: IC-weighted composite signals with correlation penalty
+- **Regime Detection**: Market regime classification (trending/mean-reverting/volatile)
+- **Turnover Analysis**: Portfolio turnover and transaction cost modeling
+- **REST API**: Complete API for programmatic access
+- **Research Dashboard**: Interactive web UI for signal analysis
+
 ## Installation
 
 ### Prerequisites
@@ -50,6 +63,8 @@ Access at http://127.0.0.1:5002
 
 ## Usage
 
+### Pattern Scanner
+
 1. **Scan Markets**: Use the dropdown to scan S&P 500, NASDAQ, or All US stocks
 2. **View Details**: Click "View" on any detected pattern for full analysis
 3. **Customize Charts**:
@@ -57,12 +72,77 @@ Access at http://127.0.0.1:5002
    - Enable CTO Larsson Lines
 4. **Analyze Patterns**: Review technical indicators, DCF, and options plays
 
+### Alpha Research Platform
+
+Access research dashboard at: **http://localhost:5002/research**
+
+#### Quick Start
+
+```python
+from signals import get_signal
+from backtest import run_signal_backtest
+import yfinance as yf
+import pandas as pd
+
+# Fetch data
+symbols = ['AAPL', 'MSFT', 'GOOGL']
+data = []
+for symbol in symbols:
+    df = yf.Ticker(symbol).history(start='2024-01-01', end='2025-12-31')
+    df['symbol'] = symbol
+    df = df.reset_index()
+    df.columns = [c.lower() for c in df.columns]
+    data.append(df[['symbol', 'date', 'open', 'high', 'low', 'close', 'volume']])
+
+df_prices = pd.concat(data)
+
+# Compute and backtest signal
+signal = get_signal('rsi_14')
+df_signals = signal.compute(df_prices)
+results = run_signal_backtest(df_signals, df_prices, horizon_days=20)
+
+print(f"IC: {results['ic_pearson_mean']:.2%}")
+print(f"Hit Rate: {results['hit_rate']:.1%}")
+print(f"Sharpe: {results['long_short_sharpe']:.2f}")
+```
+
+#### Available Signals
+
+- **Technical**: `rsi_14`, `macd`, `momentum_20`, `volume_surge_20`, `ma_cross_50_200`, `cto_larsson`, `adx_14`
+- **Patterns**: `cup_handle`, `asc_triangle`, `bull_flag`, `double_bottom`
+
+#### Key Features
+
+1. **Backtest Signals**: Compute IC, hit rate, and risk-adjusted returns
+2. **Decay Analysis**: Analyze signal strength across multiple horizons
+3. **Correlation Matrix**: Identify redundant and diversifying signals
+4. **Composite Signals**: Combine multiple signals with IC-based weights
+5. **Regime Analysis**: Evaluate signal performance by market regime
+6. **Turnover Analysis**: Model transaction costs and portfolio turnover
+
+See `docs/QUICKSTART.md` for detailed guide.
+
 ## API Endpoints
+
+### Pattern Scanner
+
+### Pattern Scanner
 
 - `GET /`: Main scanner page
 - `GET /chart/<symbol>`: Detailed chart with toggles
 - `POST /scan`: Bulk market scan (JSON response)
 - `GET /api/scan?market=sp500`: API scan endpoint
+
+### Alpha Research Platform
+
+- `GET /signals/list`: List all available signals
+- `POST /signals/backtest`: Run signal backtest
+- `POST /signals/decay`: Decay analysis across horizons
+- `POST /signals/correlation`: Signal correlation matrix
+- `POST /signals/composite`: Build composite signal
+- `POST /signals/regime`: Regime-conditional analysis
+- `POST /signals/turnover`: Portfolio turnover analysis
+- `GET /research`: Research dashboard UI
 
 ## Configuration
 

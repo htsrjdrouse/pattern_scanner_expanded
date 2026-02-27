@@ -1553,8 +1553,13 @@ def generate_unified_chart(symbol, df, pattern, asc_triangle, bull_flag, double_
     if show_smc:
         # Calculate pivot points for market structure
         window = 5  # Lookback for pivots
-        df['Pivot_High'] = df['High'][argrelextrema(df['High'].values, comparator=np.greater, order=window)[0]]
-        df['Pivot_Low'] = df['Low'][argrelextrema(df['Low'].values, comparator=np.less, order=window)[0]]
+        high_pivots = argrelextrema(df['High'].values, comparator=np.greater, order=window)[0]
+        low_pivots = argrelextrema(df['Low'].values, comparator=np.less, order=window)[0]
+        
+        df['Pivot_High'] = np.nan
+        df['Pivot_Low'] = np.nan
+        df.iloc[high_pivots, df.columns.get_loc('Pivot_High')] = df['High'].iloc[high_pivots].values
+        df.iloc[low_pivots, df.columns.get_loc('Pivot_Low')] = df['Low'].iloc[low_pivots].values
 
         # Market Structure: BOS and CHoCH
         bullish_bos = []
@@ -2007,6 +2012,7 @@ def home():
         <div class="navbar">
             <a href="/">Home</a>
             <a href="/tracked">Tracked Stocks</a>
+            <a href="/research">🔬 Alpha Research</a>
         </div>
         <h1>🏆 Stock Pattern Scanner <span class="new-badge">ENHANCED</span></h1>
         <p>Multi-pattern detection with DCF valuation and advanced charting.</p>
@@ -2145,6 +2151,7 @@ def scan():
         <div class="navbar">
             <a href="/">Home</a>
             <a href="/tracked">Tracked Stocks</a>
+            <a href="/research">🔬 Alpha Research</a>
         </div>
         <h1>🏆 Stock Pattern Scanner Scan Results</h1>
         <p><strong>Market:</strong> {{ market_name }} | <strong>Pattern:</strong> All Patterns | 
@@ -3112,6 +3119,15 @@ def remove_tracked(ticker):
     except Exception as e:
         flash(f'Error removing stock: {str(e)}', 'error')
     return redirect('/tracked')
+
+# Register research API blueprint
+try:
+    from research_api import research_bp
+    app.register_blueprint(research_bp)
+    from research_dashboard import add_research_routes
+    add_research_routes(app)
+except ImportError:
+    pass  # Research API not available
 
 if __name__ == "__main__":
     # Disable reloader to prevent crashes during long scans

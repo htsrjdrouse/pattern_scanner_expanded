@@ -67,25 +67,39 @@ RESEARCH_DASHBOARD_HTML = """
             width: 100%;
             border-collapse: collapse;
             margin-top: 15px;
+            table-layout: fixed;
         }
         th, td {
-            padding: 12px;
-            text-align: left;
+            padding: 12px 8px;
+            text-align: center;
             border-bottom: 1px solid #3a3a52;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        th:first-child, td:first-child {
+            text-align: left;
+            font-weight: 600;
         }
         th {
             background: #3a3a52;
             color: #4fc3f7;
             font-weight: 600;
+            position: sticky;
+            top: 0;
         }
         tr:hover {
             background: #3a3a52;
         }
         .metric {
             display: inline-block;
-            padding: 5px 10px;
-            border-radius: 5px;
-            margin: 2px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin: 0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.95em;
+            min-width: 60px;
+            text-align: center;
         }
         .metric.positive {
             background: #1b5e20;
@@ -170,8 +184,8 @@ RESEARCH_DASHBOARD_HTML = """
             <form id="backtestForm">
                 <div class="grid">
                     <div class="form-group">
-                        <label>Signal</label>
-                        <select name="signal_name" required>
+                        <label>Signals (Ctrl+Click for multiple)</label>
+                        <select name="signal_names" multiple size="8" required>
                             {% for name in signals.keys() %}
                             <option value="{{ name }}">{{ name }}</option>
                             {% endfor %}
@@ -241,75 +255,71 @@ RESEARCH_DASHBOARD_HTML = """
                 case '3y': startDate.setFullYear(startDate.getFullYear() - 3); break;
             }
             
-            const data = {
-                signal_name: formData.get('signal_name'),
-                symbols: formData.get('symbols').split(',').map(s => s.trim()),
-                horizon_days: parseInt(formData.get('horizon_days')),
-                start_date: startDate.toISOString().split('T')[0],
-                end_date: endDate.toISOString().split('T')[0]
-            };
+            const signalNames = Array.from(formData.getAll('signal_names'));
+            const symbols = formData.get('symbols').split(',').map(s => s.trim());
+            const horizonDays = parseInt(formData.get('horizon_days'));
+            const startDateStr = startDate.toISOString().split('T')[0];
+            const endDateStr = endDate.toISOString().split('T')[0];
             
-            document.getElementById('results').innerHTML = '<p>Running backtest...</p>';
+            document.getElementById('results').innerHTML = `<p>Running backtest for ${signalNames.length} signal(s)...</p>`;
             
             try {
-                const response = await fetch('/signals/backtest', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(data)
-                });
-                const result = await response.json();
+                // Run all backtests in parallel
+                const promises = signalNames.map(signalName => 
+                    fetch('/signals/backtest', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            signal_name: signalName,
+                            symbols: symbols,
+                            horizon_days: horizonDays,
+                            start_date: startDateStr,
+                            end_date: endDateStr
+                        })
+                    }).then(r => r.json())
+                );
                 
-                if (result.error) {
-                    document.getElementById('results').innerHTML = `<p style="color: #ef5350;">Error: ${result.error}</p>`;
-                } else {
-                    const formatValue = (val) => val === null || val === undefined ? 'N/A' : val;
-                    const formatPct = (val) => val === null || val === undefined ? 'N/A' : (val * 100).toFixed(2) + '%';
-                    const formatNum = (val) => val === null || val === undefined ? 'N/A' : val.toFixed(2);
-                    
-                    const html = `
-                        <h3>Backtest Results: ${result.signal_name}</h3>
-                        <table>
-                            <tr><th>Metric</th><th>Value</th><th>Interpretation</th></tr>
-                            <tr>
-                                <td>IC (Pearson)</td>
-                                <td class="metric ${result.ic_pearson_mean > 0 ? 'positive' : 'negative'}">${formatPct(result.ic_pearson_mean)}</td>
-                                <td style="font-size: 0.9em; color: #9e9e9e;">${result.ic_pearson_mean > 0.05 ? '✓ Good predictive power' : result.ic_pearson_mean > 0 ? '⚠ Weak signal' : '✗ No predictive power'}</td>
-                            </tr>
-                            <tr>
-                                <td>IC (Spearman)</td>
-                                <td class="metric ${result.ic_spearman_mean > 0 ? 'positive' : 'negative'}">${formatPct(result.ic_spearman_mean)}</td>
-                                <td style="font-size: 0.9em; color: #9e9e9e;">${result.ic_spearman_mean > 0.05 ? '✓ Good rank correlation' : result.ic_spearman_mean > 0 ? '⚠ Weak ranking' : '✗ Poor ranking'}</td>
-                            </tr>
-                            <tr>
-                                <td>Hit Rate</td>
-                                <td class="metric ${result.hit_rate > 0.5 ? 'positive' : 'negative'}">${formatPct(result.hit_rate)}</td>
-                                <td style="font-size: 0.9em; color: #9e9e9e;">${result.hit_rate > 0.55 ? '✓ Reliable' : result.hit_rate > 0.5 ? '⚠ Slightly better than random' : '✗ Worse than coin flip'}</td>
-                            </tr>
-                            <tr>
-                                <td>Long-Only Return</td>
-                                <td class="metric ${result.long_only_return > 0 ? 'positive' : 'negative'}">${formatPct(result.long_only_return)}</td>
-                                <td style="font-size: 0.9em; color: #9e9e9e;">${result.long_only_return > 0 ? '✓ Profitable' : '✗ Losing strategy'}</td>
-                            </tr>
-                            <tr>
-                                <td>Long-Only Sharpe</td>
-                                <td class="metric ${result.long_only_sharpe > 0 ? 'positive' : 'negative'}">${formatNum(result.long_only_sharpe)}</td>
-                                <td style="font-size: 0.9em; color: #9e9e9e;">${result.long_only_sharpe > 1 ? '✓ Good risk-adjusted' : result.long_only_sharpe > 0 ? '⚠ Low risk-adjusted return' : '✗ Negative risk-adjusted'}</td>
-                            </tr>
-                            <tr>
-                                <td>Long-Short Return</td>
-                                <td class="metric ${result.long_short_return > 0 ? 'positive' : 'negative'}">${formatPct(result.long_short_return)}</td>
-                                <td style="font-size: 0.9em; color: #9e9e9e;">${result.long_short_return > 0 ? '✓ Signal ranks correctly' : '✗ Poor ranking ability'}</td>
-                            </tr>
-                            <tr>
-                                <td>Long-Short Sharpe</td>
-                                <td class="metric ${result.long_short_sharpe > 0 ? 'positive' : 'negative'}">${formatNum(result.long_short_sharpe)}</td>
-                                <td style="font-size: 0.9em; color: #9e9e9e;">${result.long_short_sharpe > 1 ? '✓ Strong market-neutral' : result.long_short_sharpe > 0 ? '⚠ Weak market-neutral' : '✗ Negative market-neutral'}</td>
-                            </tr>
-                            <tr><td>Observations</td><td>${result.n_observations}</td><td style="font-size: 0.9em; color: #9e9e9e;">${result.n_observations > 200 ? '✓ Reliable sample' : result.n_observations > 100 ? '⚠ Moderate sample' : '⚠ Small sample'}</td></tr>
-                        </table>
-                    `;
-                    document.getElementById('results').innerHTML = html;
+                const results = await Promise.all(promises);
+                
+                // Check for errors
+                const errors = results.filter(r => r.error);
+                if (errors.length > 0) {
+                    document.getElementById('results').innerHTML = `<p style="color: #ef5350;">Errors: ${errors.map(e => e.error).join(', ')}</p>`;
+                    return;
                 }
+                
+                const formatPct = (val) => val === null || val === undefined ? 'N/A' : (val * 100).toFixed(2) + '%';
+                const formatNum = (val) => val === null || val === undefined ? 'N/A' : val.toFixed(2);
+                
+                // Build comparison table
+                let html = '<h3>Backtest Results Comparison</h3>';
+                html += '<div style="overflow-x: auto;">';
+                html += '<table><thead><tr>';
+                html += '<th style="min-width: 120px;">Signal</th>';
+                html += '<th style="min-width: 80px;">IC</th>';
+                html += '<th style="min-width: 80px;">Hit Rate</th>';
+                html += '<th style="min-width: 90px;">Long Ret</th>';
+                html += '<th style="min-width: 90px;">L/S Ret</th>';
+                html += '<th style="min-width: 90px;">L/S Sharpe</th>';
+                html += '<th style="min-width: 70px;">Obs</th>';
+                html += '</tr></thead><tbody>';
+                
+                results.forEach(result => {
+                    html += `<tr>
+                        <td style="text-align: left;"><strong>${result.signal_name}</strong></td>
+                        <td><span class="metric ${result.ic_pearson_mean > 0 ? 'positive' : 'negative'}">${formatPct(result.ic_pearson_mean)}</span></td>
+                        <td><span class="metric ${result.hit_rate > 0.5 ? 'positive' : 'negative'}">${formatPct(result.hit_rate)}</span></td>
+                        <td><span class="metric ${result.long_only_return > 0 ? 'positive' : 'negative'}">${formatPct(result.long_only_return)}</span></td>
+                        <td><span class="metric ${result.long_short_return > 0 ? 'positive' : 'negative'}">${formatPct(result.long_short_return)}</span></td>
+                        <td><span class="metric ${result.long_short_sharpe > 0 ? 'positive' : 'negative'}">${formatNum(result.long_short_sharpe)}</span></td>
+                        <td>${result.n_observations}</td>
+                    </tr>`;
+                });
+                
+                html += '</tbody></table></div>';
+                html += '<p style="margin-top: 15px; color: #9e9e9e; font-size: 0.9em;">💡 Tip: Higher IC and Sharpe ratios indicate better signals. Hit rate > 50% means the signal works more often than not.</p>';
+                
+                document.getElementById('results').innerHTML = html;
             } catch (error) {
                 document.getElementById('results').innerHTML = `<p style="color: #ef5350;">Error: ${error.message}</p>`;
             }
@@ -338,21 +348,24 @@ RESEARCH_DASHBOARD_HTML = """
                 if (result.error) {
                     document.getElementById('corrResults').innerHTML = `<p style="color: #ef5350;">Error: ${result.error}</p>`;
                 } else {
-                    let html = '<h3>Signal Correlation Matrix</h3><table><thead><tr><th>Signal</th>';
                     const signals = Object.keys(result);
-                    signals.forEach(s => html += `<th>${s}</th>`);
+                    let html = '<h3>Signal Correlation Matrix</h3>';
+                    html += '<div style="overflow-x: auto;">';
+                    html += '<table style="table-layout: auto;"><thead><tr>';
+                    html += '<th style="min-width: 120px; text-align: left;">Signal</th>';
+                    signals.forEach(s => html += `<th style="min-width: 80px;">${s}</th>`);
                     html += '</tr></thead><tbody>';
                     
                     signals.forEach(s1 => {
-                        html += `<tr><td><strong>${s1}</strong></td>`;
+                        html += `<tr><td style="text-align: left;"><strong>${s1}</strong></td>`;
                         signals.forEach(s2 => {
                             const corr = result[s1][s2];
                             const color = Math.abs(corr) > 0.7 ? (corr > 0 ? 'positive' : 'negative') : 'neutral';
-                            html += `<td class="metric ${color}">${corr.toFixed(2)}</td>`;
+                            html += `<td><span class="metric ${color}">${corr.toFixed(2)}</span></td>`;
                         });
                         html += '</tr>';
                     });
-                    html += '</tbody></table>';
+                    html += '</tbody></table></div>';
                     
                     document.getElementById('corrResults').innerHTML = html;
                 }

@@ -57,39 +57,46 @@ class CupAndHandleSignal(Signal):
             df = df_prices[df_prices['symbol'] == symbol].copy()
             df = df.sort_values('date').reset_index(drop=True)
             
-            if len(df) < 30:
+            if len(df) < 60:
                 continue
             
-            # Detect cup: find lowest point in lookback
-            lookback = min(130, len(df))
-            cup_low_idx = df['low'].iloc[-lookback:].idxmin()
-            cup_low = df.loc[cup_low_idx, 'low']
-            
-            # Cup depth
-            left_high = df['high'].iloc[-lookback:-lookback//2].max()
-            right_high = df['high'].iloc[-20:].max()
-            depth = (left_high - cup_low) / left_high if left_high > 0 else 0
-            
-            # Handle: recent pullback from right side
-            handle_start_idx = df['high'].iloc[-20:].idxmax()
-            handle_low = df['low'].iloc[handle_start_idx:].min()
-            handle_depth = (df.loc[handle_start_idx, 'high'] - handle_low) / df.loc[handle_start_idx, 'high'] if df.loc[handle_start_idx, 'high'] > 0 else 0
-            
-            # Score: depth in range 0.12-0.33, handle < 0.15
-            score = 0
-            if 0.12 <= depth <= 0.33:
-                score += 50
-            if handle_depth < 0.15:
-                score += 30
-            if df['volume'].iloc[-5:].mean() > df['volume'].iloc[-30:-5].mean():
-                score += 20
-            
-            results.append({
-                'symbol': symbol,
-                'date': df['date'].iloc[-1],
-                'signal_name': self.name,
-                'signal_value': score
-            })
+            # Compute signal for each date with sufficient history
+            for i in range(60, len(df)):
+                window = df.iloc[:i+1]
+                
+                # Use last 130 days or available data
+                lookback = min(130, len(window))
+                recent = window.iloc[-lookback:]
+                
+                # Find cup low
+                cup_low_idx = recent['low'].idxmin()
+                cup_low = recent.loc[cup_low_idx, 'low']
+                
+                # Cup depth
+                left_high = recent['high'].iloc[:lookback//2].max()
+                right_high = recent['high'].iloc[-20:].max()
+                depth = (left_high - cup_low) / left_high if left_high > 0 else 0
+                
+                # Handle: recent pullback
+                handle_start_idx = recent['high'].iloc[-20:].idxmax()
+                handle_low = recent['low'].iloc[handle_start_idx:].min() if handle_start_idx < len(recent) else cup_low
+                handle_depth = (recent.loc[handle_start_idx, 'high'] - handle_low) / recent.loc[handle_start_idx, 'high'] if recent.loc[handle_start_idx, 'high'] > 0 else 0
+                
+                # Score
+                score = 0
+                if 0.12 <= depth <= 0.33:
+                    score += 50
+                if handle_depth < 0.15:
+                    score += 30
+                if len(recent) >= 30 and recent['volume'].iloc[-5:].mean() > recent['volume'].iloc[-30:-5].mean():
+                    score += 20
+                
+                results.append({
+                    'symbol': symbol,
+                    'date': window['date'].iloc[-1],
+                    'signal_name': self.name,
+                    'signal_value': score
+                })
         
         return pd.DataFrame(results)
 
@@ -104,35 +111,39 @@ class AscendingTriangleSignal(Signal):
             df = df_prices[df_prices['symbol'] == symbol].copy()
             df = df.sort_values('date').reset_index(drop=True)
             
-            if len(df) < 30:
+            if len(df) < 40:
                 continue
             
-            lookback = min(60, len(df))
-            highs = df['high'].iloc[-lookback:].values
-            lows = df['low'].iloc[-lookback:].values
-            
-            # Flat resistance: std of highs
-            resistance = highs.max()
-            resistance_std = highs[-20:].std() / resistance if resistance > 0 else 1
-            
-            # Rising support: linear regression of lows
-            x = np.arange(len(lows))
-            slope, _, r_val, _, _ = linregress(x, lows)
-            
-            score = 0
-            if resistance_std < 0.02:  # Flat resistance
-                score += 40
-            if slope > 0 and r_val**2 > 0.5:  # Rising support
-                score += 40
-            if df['volume'].iloc[-5:].mean() > df['volume'].iloc[-30:-5].mean():
-                score += 20
-            
-            results.append({
-                'symbol': symbol,
-                'date': df['date'].iloc[-1],
-                'signal_name': self.name,
-                'signal_value': score
-            })
+            for i in range(40, len(df)):
+                window = df.iloc[:i+1]
+                lookback = min(60, len(window))
+                recent = window.iloc[-lookback:]
+                
+                highs = recent['high'].values
+                lows = recent['low'].values
+                
+                # Flat resistance
+                resistance = highs.max()
+                resistance_std = highs[-20:].std() / resistance if resistance > 0 else 1
+                
+                # Rising support
+                x = np.arange(len(lows))
+                slope, _, r_val, _, _ = linregress(x, lows)
+                
+                score = 0
+                if resistance_std < 0.02:
+                    score += 40
+                if slope > 0 and r_val**2 > 0.5:
+                    score += 40
+                if len(recent) >= 30 and recent['volume'].iloc[-5:].mean() > recent['volume'].iloc[-30:-5].mean():
+                    score += 20
+                
+                results.append({
+                    'symbol': symbol,
+                    'date': window['date'].iloc[-1],
+                    'signal_name': self.name,
+                    'signal_value': score
+                })
         
         return pd.DataFrame(results)
 
@@ -147,34 +158,37 @@ class BullFlagSignal(Signal):
             df = df_prices[df_prices['symbol'] == symbol].copy()
             df = df.sort_values('date').reset_index(drop=True)
             
-            if len(df) < 30:
+            if len(df) < 35:
                 continue
             
-            # Pole: strong move up
-            pole_start = len(df) - 30
-            pole_end = len(df) - 10
-            pole_gain = (df['close'].iloc[pole_end] - df['close'].iloc[pole_start]) / df['close'].iloc[pole_start] if df['close'].iloc[pole_start] > 0 else 0
-            
-            # Flag: consolidation with slight downward drift
-            flag_prices = df['close'].iloc[-10:].values
-            x = np.arange(len(flag_prices))
-            slope, _, _, _, _ = linregress(x, flag_prices)
-            flag_drift = slope / df['close'].iloc[-10] if df['close'].iloc[-10] > 0 else 0
-            
-            score = 0
-            if pole_gain > 0.15:  # Strong pole
-                score += 50
-            if -0.02 < flag_drift < 0.005:  # Slight downward consolidation
-                score += 30
-            if df['volume'].iloc[-10:].mean() < df['volume'].iloc[-30:-10].mean():  # Lower volume in flag
-                score += 20
-            
-            results.append({
-                'symbol': symbol,
-                'date': df['date'].iloc[-1],
-                'signal_name': self.name,
-                'signal_value': score
-            })
+            for i in range(35, len(df)):
+                window = df.iloc[:i+1]
+                
+                # Pole: strong move up
+                pole_start = max(0, len(window) - 30)
+                pole_end = max(0, len(window) - 10)
+                pole_gain = (window['close'].iloc[pole_end] - window['close'].iloc[pole_start]) / window['close'].iloc[pole_start] if window['close'].iloc[pole_start] > 0 else 0
+                
+                # Flag: consolidation
+                flag_prices = window['close'].iloc[-10:].values
+                x = np.arange(len(flag_prices))
+                slope, _, _, _, _ = linregress(x, flag_prices)
+                flag_drift = slope / window['close'].iloc[-10] if window['close'].iloc[-10] > 0 else 0
+                
+                score = 0
+                if pole_gain > 0.15:
+                    score += 50
+                if -0.02 < flag_drift < 0.005:
+                    score += 30
+                if len(window) >= 30 and window['volume'].iloc[-10:].mean() < window['volume'].iloc[-30:-10].mean():
+                    score += 20
+                
+                results.append({
+                    'symbol': symbol,
+                    'date': window['date'].iloc[-1],
+                    'signal_name': self.name,
+                    'signal_value': score
+                })
         
         return pd.DataFrame(results)
 
@@ -189,40 +203,44 @@ class DoubleBottomSignal(Signal):
             df = df_prices[df_prices['symbol'] == symbol].copy()
             df = df.sort_values('date').reset_index(drop=True)
             
-            if len(df) < 40:
+            if len(df) < 50:
                 continue
             
-            lookback = min(90, len(df))
-            lows = df['low'].iloc[-lookback:].values
-            
-            # Find two lowest points
-            local_min_idx = argrelextrema(lows, np.less, order=5)[0]
-            if len(local_min_idx) < 2:
-                results.append({'symbol': symbol, 'date': df['date'].iloc[-1], 'signal_name': self.name, 'signal_value': 0})
-                continue
-            
-            sorted_mins = sorted([(idx, lows[idx]) for idx in local_min_idx], key=lambda x: x[1])
-            bottom1_idx, bottom1_val = sorted_mins[0]
-            bottom2_idx, bottom2_val = sorted_mins[1]
-            
-            # Check similarity
-            similarity = abs(bottom1_val - bottom2_val) / bottom1_val if bottom1_val > 0 else 1
-            gap = abs(bottom2_idx - bottom1_idx)
-            
-            score = 0
-            if similarity < 0.03:  # Bottoms within 3%
-                score += 50
-            if 15 <= gap <= 60:  # Proper spacing
-                score += 30
-            if df['volume'].iloc[-5:].mean() > df['volume'].iloc[-30:-5].mean():
-                score += 20
-            
-            results.append({
-                'symbol': symbol,
-                'date': df['date'].iloc[-1],
-                'signal_name': self.name,
-                'signal_value': score
-            })
+            for i in range(50, len(df)):
+                window = df.iloc[:i+1]
+                lookback = min(90, len(window))
+                recent = window.iloc[-lookback:]
+                
+                lows = recent['low'].values
+                
+                # Find two lowest points
+                local_min_idx = argrelextrema(lows, np.less, order=5)[0]
+                if len(local_min_idx) < 2:
+                    results.append({'symbol': symbol, 'date': window['date'].iloc[-1], 'signal_name': self.name, 'signal_value': 0})
+                    continue
+                
+                sorted_mins = sorted([(idx, lows[idx]) for idx in local_min_idx], key=lambda x: x[1])
+                bottom1_idx, bottom1_val = sorted_mins[0]
+                bottom2_idx, bottom2_val = sorted_mins[1]
+                
+                # Check similarity
+                similarity = abs(bottom1_val - bottom2_val) / bottom1_val if bottom1_val > 0 else 1
+                gap = abs(bottom2_idx - bottom1_idx)
+                
+                score = 0
+                if similarity < 0.03:
+                    score += 50
+                if 15 <= gap <= 60:
+                    score += 30
+                if len(recent) >= 30 and recent['volume'].iloc[-5:].mean() > recent['volume'].iloc[-30:-5].mean():
+                    score += 20
+                
+                results.append({
+                    'symbol': symbol,
+                    'date': window['date'].iloc[-1],
+                    'signal_name': self.name,
+                    'signal_value': score
+                })
         
         return pd.DataFrame(results)
 
@@ -463,6 +481,10 @@ SIGNAL_REGISTRY = {
     'cto_larsson': CTOLarssonSignal(),
     'ma_cross_50_200': MovingAverageCrossSignal(50, 200),
     'momentum_20': MomentumSignal(20),
+    'cup_handle': CupAndHandleSignal(),
+    'asc_triangle': AscendingTriangleSignal(),
+    'bull_flag': BullFlagSignal(),
+    'double_bottom': DoubleBottomSignal(),
 }
 
 

@@ -53,5 +53,60 @@
     "email": "rjdrouse@gmail.com",
     "added_at": "2026-02-24T17:45:39.897613",
     "notified": false
+  },
+  {
+    "ticker": "CROX",
+    "buy_point": 91.74,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": 14.8,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-25T15:21:55.607617",
+    "notified": false
+  },
+  {
+    "ticker": "ERAS",
+    "buy_point": 1.64,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": 13.1,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-25T15:25:20.316505",
+    "notified": false
+  },
+  {
+    "ticker": "DGII",
+    "buy_point": 34.96,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": 12.1,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-25T15:27:56.466818",
+    "notified": false
+  },
+  {
+    "ticker": "EPR",
+    "buy_point": 55.65,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": 0.4,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-27T14:19:47.744775",
+    "notified": false
+  },
+  {
+    "ticker": "PRVA",
+    "buy_point": 23.61,
+    "rsi_min": 50.0,
+    "rsi_max": 70.0,
+    "volume_multiple": 2.0,
+    "breakeven_move": 19.0,
+    "email": "rjdrouse@gmail.com",
+    "added_at": "2026-02-27T14:25:07.447243",
+    "notified": false
   }
 ]

@@ -1,4 +1,6 @@
- To manage the scanner:
+source .venv/bin/activate
+ 
+To manage the scanner:
 
  ```bash
    cd /Users/richard/Documents/stocks/pattern_scanner

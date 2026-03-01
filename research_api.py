@@ -12,6 +12,22 @@ import analytics
 
 research_bp = Blueprint('research', __name__, url_prefix='/signals')
 
+import json
+import os
+
+SECTORS_FILE = 'sectors.json'
+
+def load_sectors():
+    """Load sectors from JSON file."""
+    if os.path.exists(SECTORS_FILE):
+        with open(SECTORS_FILE, 'r') as f:
+            return json.load(f)
+    return {"sectors": {}}
+
+def save_sectors(sectors_data):
+    """Save sectors to JSON file."""
+    with open(SECTORS_FILE, 'w') as f:
+        json.dump(sectors_data, f, indent=2)
 
 def fetch_price_data(symbols, start_date, end_date):
     """Fetch price data for symbols."""
@@ -351,3 +367,74 @@ def analyze_turnover_endpoint():
     turnover_metrics = analytics.analyze_turnover(df_signals, rebalance_freq, top_pct)
     
     return jsonify(turnover_metrics)
+
+
+@research_bp.route('/sectors', methods=['GET'])
+def get_sectors():
+    """Get all sectors."""
+    sectors_data = load_sectors()
+    return jsonify(sectors_data)
+
+
+@research_bp.route('/sectors/<sector_id>', methods=['GET'])
+def get_sector(sector_id):
+    """Get specific sector."""
+    sectors_data = load_sectors()
+    sector = sectors_data.get('sectors', {}).get(sector_id)
+    if not sector:
+        return jsonify({'error': 'Sector not found'}), 404
+    return jsonify(sector)
+
+
+@research_bp.route('/sectors', methods=['POST'])
+def create_sector():
+    """Create new sector."""
+    data = request.get_json()
+    sector_id = data.get('id')
+    name = data.get('name')
+    tickers = data.get('tickers', [])
+    
+    if not sector_id or not name:
+        return jsonify({'error': 'id and name required'}), 400
+    
+    sectors_data = load_sectors()
+    if sector_id in sectors_data.get('sectors', {}):
+        return jsonify({'error': 'Sector already exists'}), 400
+    
+    sectors_data.setdefault('sectors', {})[sector_id] = {
+        'name': name,
+        'tickers': tickers
+    }
+    save_sectors(sectors_data)
+    return jsonify({'success': True, 'sector': sectors_data['sectors'][sector_id]})
+
+
+@research_bp.route('/sectors/<sector_id>', methods=['PUT'])
+def update_sector(sector_id):
+    """Update existing sector."""
+    data = request.get_json()
+    sectors_data = load_sectors()
+    
+    if sector_id not in sectors_data.get('sectors', {}):
+        return jsonify({'error': 'Sector not found'}), 404
+    
+    if 'name' in data:
+        sectors_data['sectors'][sector_id]['name'] = data['name']
+    if 'tickers' in data:
+        sectors_data['sectors'][sector_id]['tickers'] = data['tickers']
+    
+    save_sectors(sectors_data)
+    return jsonify({'success': True, 'sector': sectors_data['sectors'][sector_id]})
+
+
+@research_bp.route('/sectors/<sector_id>', methods=['DELETE'])
+def delete_sector(sector_id):
+    """Delete sector."""
+    sectors_data = load_sectors()
+    
+    if sector_id not in sectors_data.get('sectors', {}):
+        return jsonify({'error': 'Sector not found'}), 404
+    
+    del sectors_data['sectors'][sector_id]
+    save_sectors(sectors_data)
+    return jsonify({'success': True})

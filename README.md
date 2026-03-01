@@ -76,6 +76,18 @@ Access at http://127.0.0.1:5002
 
 Access research dashboard at: **http://localhost:5002/research**
 
+#### Sector Management 🆕
+
+Organize stocks into market sectors for quick benchmarking:
+
+- **Sector Dropdown**: Select from 19 pre-configured sectors (Semiconductors, Energy, AI, etc.)
+- **Auto-populate**: Symbols field automatically fills with sector tickers
+- **CRUD Operations**: Create, edit, and delete custom sectors via UI or API
+- **Sector Manager**: Click "Manage" button to add/edit sectors in modal interface
+- **API Endpoints**: Full REST API for programmatic sector management
+
+**Pre-loaded Sectors**: Minerals & Mining, Energy, Solar, Nuclear, Semiconductors, Communications, SaaS, Biotech, Healthcare, Cybersecurity, AI, Data Centers, Crypto, Construction, Agriculture, Materials, Chemicals, Financial Services, REITs
+
 #### Quick Start
 
 ```python
@@ -143,6 +155,11 @@ See `docs/QUICKSTART.md` for detailed guide.
 - `POST /signals/regime`: Regime-conditional analysis
 - `POST /signals/turnover`: Portfolio turnover analysis
 - `GET /research`: Research dashboard UI
+- `GET /signals/sectors`: Get all sectors
+- `GET /signals/sectors/<id>`: Get specific sector
+- `POST /signals/sectors`: Create new sector
+- `PUT /signals/sectors/<id>`: Update sector
+- `DELETE /signals/sectors/<id>`: Delete sector
 
 ## Configuration
 

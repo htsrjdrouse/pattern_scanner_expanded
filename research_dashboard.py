@@ -192,8 +192,14 @@ RESEARCH_DASHBOARD_HTML = """
                         </select>
                     </div>
                     <div class="form-group">
+                        <label>Sector <button type="button" onclick="showSectorManager()" style="padding: 4px 8px; font-size: 0.85em; margin-left: 10px;">Manage</button></label>
+                        <select id="sectorSelect" name="sector">
+                            <option value="">Custom Symbols</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
                         <label>Symbols (comma-separated)</label>
-                        <input type="text" name="symbols" value="AAPL,MSFT,GOOGL,AMZN,NVDA" required>
+                        <input type="text" id="symbolsInput" name="symbols" value="AAPL,MSFT,GOOGL,AMZN,NVDA" required>
                     </div>
                     <div class="form-group">
                         <label>Timeframe</label>
@@ -215,21 +221,62 @@ RESEARCH_DASHBOARD_HTML = """
             <div id="results" style="margin-top: 20px;"></div>
         </div>
 
+        <div id="sectorModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; overflow-y: auto;">
+            <div style="max-width: 900px; margin: 50px auto; background: #2a2a3e; padding: 30px; border-radius: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 style="margin: 0; color: #4fc3f7;">Sector Manager</h2>
+                    <button onclick="hideSectorManager()" style="background: #ef5350;">Close</button>
+                </div>
+                
+                <div style="margin-bottom: 30px;">
+                    <h3 style="color: #4fc3f7;">Create New Sector</h3>
+                    <form id="createSectorForm">
+                        <div class="form-group">
+                            <label>Sector ID (lowercase, underscores)</label>
+                            <input type="text" id="newSectorId" placeholder="e.g., tech_giants" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Sector Name</label>
+                            <input type="text" id="newSectorName" placeholder="e.g., Tech Giants" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Tickers (comma-separated)</label>
+                            <textarea id="newSectorTickers" rows="3" placeholder="AAPL,MSFT,GOOGL,AMZN,META" required></textarea>
+                        </div>
+                        <button type="submit">Create Sector</button>
+                    </form>
+                </div>
+
+                <div>
+                    <h3 style="color: #4fc3f7;">Existing Sectors</h3>
+                    <div id="sectorList"></div>
+                </div>
+            </div>
+        </div>
+
         <div class="section">
             <h2>📈 Signal Correlation Analysis</h2>
             <p style="color: #9e9e9e;">Compare multiple signals to identify redundancy and diversification opportunities.</p>
             <form id="correlationForm">
-                <div class="form-group">
-                    <label>Select Signals (Ctrl+Click for multiple)</label>
-                    <select name="signal_names" multiple size="8" required>
-                        {% for name in signals.keys() %}
-                        <option value="{{ name }}">{{ name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Symbols (comma-separated)</label>
-                    <input type="text" name="symbols" value="AAPL,MSFT,GOOGL,AMZN,NVDA" required>
+                <div class="grid">
+                    <div class="form-group">
+                        <label>Select Signals (Ctrl+Click for multiple)</label>
+                        <select name="signal_names" multiple size="8" required>
+                            {% for name in signals.keys() %}
+                            <option value="{{ name }}">{{ name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Sector <button type="button" onclick="showSectorManager()" style="padding: 4px 8px; font-size: 0.85em; margin-left: 10px;">Manage</button></label>
+                        <select id="corrSectorSelect" name="sector">
+                            <option value="">Custom Symbols</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Symbols (comma-separated)</label>
+                        <input type="text" id="corrSymbolsInput" name="symbols" value="AAPL,MSFT,GOOGL,AMZN,NVDA" required>
+                    </div>
                 </div>
                 <button type="submit">Compute Correlation</button>
             </form>
@@ -238,6 +285,175 @@ RESEARCH_DASHBOARD_HTML = """
     </div>
 
     <script>
+        let sectorsData = {};
+
+        async function loadSectors() {
+            try {
+                const response = await fetch('/signals/sectors');
+                sectorsData = await response.json();
+                populateSectorDropdown();
+            } catch (error) {
+                console.error('Failed to load sectors:', error);
+            }
+        }
+
+        function populateSectorDropdown() {
+            const select = document.getElementById('sectorSelect');
+            const corrSelect = document.getElementById('corrSectorSelect');
+            
+            select.innerHTML = '<option value="">Custom Symbols</option>';
+            corrSelect.innerHTML = '<option value="">Custom Symbols</option>';
+            
+            const sectors = sectorsData.sectors || {};
+            Object.keys(sectors).sort().forEach(id => {
+                const sector = sectors[id];
+                const option1 = document.createElement('option');
+                option1.value = id;
+                option1.textContent = sector.name;
+                select.appendChild(option1);
+                
+                const option2 = document.createElement('option');
+                option2.value = id;
+                option2.textContent = sector.name;
+                corrSelect.appendChild(option2);
+            });
+        }
+
+        function showSectorManager() {
+            document.getElementById('sectorModal').style.display = 'block';
+            renderSectorList();
+        }
+
+        function hideSectorManager() {
+            document.getElementById('sectorModal').style.display = 'none';
+        }
+
+        function renderSectorList() {
+            const container = document.getElementById('sectorList');
+            const sectors = sectorsData.sectors || {};
+            
+            if (Object.keys(sectors).length === 0) {
+                container.innerHTML = '<p style="color: #9e9e9e;">No sectors yet. Create one above.</p>';
+                return;
+            }
+
+            let html = '';
+            Object.keys(sectors).sort().forEach(id => {
+                const sector = sectors[id];
+                html += `
+                    <div style="background: #3a3a52; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div style="flex: 1;">
+                                <h4 style="margin: 0 0 10px 0; color: #4fc3f7;">${sector.name}</h4>
+                                <p style="margin: 0; color: #9e9e9e; font-size: 0.9em;">ID: ${id}</p>
+                                <p style="margin: 5px 0 0 0; color: #b0b0b0; font-size: 0.9em;">${sector.tickers.length} tickers: ${sector.tickers.join(', ')}</p>
+                            </div>
+                            <div style="display: flex; gap: 10px;">
+                                <button onclick="editSector('${id}')" style="padding: 8px 15px; background: #4fc3f7;">Edit</button>
+                                <button onclick="deleteSector('${id}')" style="padding: 8px 15px; background: #ef5350;">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        async function deleteSector(sectorId) {
+            if (!confirm(`Delete sector "${sectorsData.sectors[sectorId].name}"?`)) return;
+            
+            try {
+                const response = await fetch(`/signals/sectors/${sectorId}`, { method: 'DELETE' });
+                const result = await response.json();
+                
+                if (result.success) {
+                    await loadSectors();
+                    renderSectorList();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Failed to delete sector: ' + error.message);
+            }
+        }
+
+        function editSector(sectorId) {
+            const sector = sectorsData.sectors[sectorId];
+            const newName = prompt('Sector Name:', sector.name);
+            if (!newName) return;
+            
+            const newTickers = prompt('Tickers (comma-separated):', sector.tickers.join(','));
+            if (!newTickers) return;
+            
+            updateSector(sectorId, newName, newTickers.split(',').map(t => t.trim()));
+        }
+
+        async function updateSector(sectorId, name, tickers) {
+            try {
+                const response = await fetch(`/signals/sectors/${sectorId}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ name, tickers })
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    await loadSectors();
+                    renderSectorList();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Failed to update sector: ' + error.message);
+            }
+        }
+
+        document.getElementById('createSectorForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const id = document.getElementById('newSectorId').value.trim();
+            const name = document.getElementById('newSectorName').value.trim();
+            const tickers = document.getElementById('newSectorTickers').value.split(',').map(t => t.trim()).filter(t => t);
+            
+            try {
+                const response = await fetch('/signals/sectors', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ id, name, tickers })
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    document.getElementById('createSectorForm').reset();
+                    await loadSectors();
+                    renderSectorList();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Failed to create sector: ' + error.message);
+            }
+        });
+
+        document.getElementById('sectorSelect').addEventListener('change', (e) => {
+            const sectorId = e.target.value;
+            if (sectorId && sectorsData.sectors && sectorsData.sectors[sectorId]) {
+                const tickers = sectorsData.sectors[sectorId].tickers;
+                document.getElementById('symbolsInput').value = tickers.join(',');
+            }
+        });
+
+        document.getElementById('corrSectorSelect').addEventListener('change', (e) => {
+            const sectorId = e.target.value;
+            if (sectorId && sectorsData.sectors && sectorsData.sectors[sectorId]) {
+                const tickers = sectorsData.sectors[sectorId].tickers;
+                document.getElementById('corrSymbolsInput').value = tickers.join(',');
+            }
+        });
+
+        // Load sectors on page load
+        loadSectors();
+
         document.getElementById('backtestForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
@@ -330,7 +546,7 @@ RESEARCH_DASHBOARD_HTML = """
             const formData = new FormData(e.target);
             const data = {
                 signal_names: Array.from(formData.getAll('signal_names')),
-                symbols: formData.get('symbols').split(',').map(s => s.trim()),
+                symbols: document.getElementById('corrSymbolsInput').value.split(',').map(s => s.trim()),
                 start_date: '2024-01-01',
                 end_date: '2025-12-31'
             };

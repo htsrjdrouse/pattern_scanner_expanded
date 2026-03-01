@@ -19,6 +19,7 @@ COPY research_dashboard.py .
 COPY signals.py .
 COPY backtest.py .
 COPY analytics.py .
+COPY sectors.json .
 
 # Expose port
 EXPOSE 5002

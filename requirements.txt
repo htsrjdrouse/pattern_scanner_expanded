@@ -10,3 +10,4 @@ numpy>=1.24
 gunicorn>=21.0
 edgartools
 pyrate-limiter
+schedule>=1.2.0

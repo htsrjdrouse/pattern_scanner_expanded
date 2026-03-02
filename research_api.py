@@ -438,3 +438,140 @@ def delete_sector(sector_id):
     del sectors_data['sectors'][sector_id]
     save_sectors(sectors_data)
     return jsonify({'success': True})
+
+
+# Sector Scan API Endpoints
+import sector_scan
+import os
+from threading import Thread
+
+# Global scan state
+current_scan_job = None
+scan_results_cache = None
+
+@research_bp.route('/sector/config', methods=['GET'])
+def get_sector_config():
+    """Get current scan configuration."""
+    config = sector_scan.load_schedule_config()
+    return jsonify(config)
+
+@research_bp.route('/sector/config', methods=['POST'])
+def save_sector_config():
+    """Save scan configuration."""
+    data = request.get_json()
+    sector_scan.save_schedule_config(data)
+    return jsonify({'success': True})
+
+@research_bp.route('/sector/results', methods=['GET'])
+def get_sector_results():
+    """Get most recent scorecard."""
+    # Find most recent CSV
+    data_dir = sector_scan.DATA_DIR
+    csv_files = list(data_dir.glob('sector_scorecard_*.csv'))
+    
+    if not csv_files:
+        return jsonify({'error': 'No results found'}), 404
+    
+    latest_file = max(csv_files, key=lambda p: p.stat().st_mtime)
+    df = pd.read_csv(latest_file)
+    
+    return jsonify({
+        'timestamp': latest_file.stat().st_mtime,
+        'filename': latest_file.name,
+        'results': df.to_dict(orient='records')
+    })
+
+@research_bp.route('/sector/run', methods=['POST'])
+def run_sector_scan():
+    """Trigger immediate scan."""
+    global current_scan_job
+    
+    data = request.get_json()
+    mode = data.get('mode', 'daily')
+    min_stocks = data.get('min_stocks', 15)
+    signal_names = data.get('signals')  # Optional custom signals
+    
+    if current_scan_job and current_scan_job.is_alive():
+        return jsonify({'error': 'Scan already running'}), 400
+    
+    job_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    def run_async():
+        try:
+            sector_scan.run_scan(mode=mode, min_stocks=min_stocks, signal_names=signal_names)
+        except Exception as e:
+            sector_scan.log(f"Scan error: {e}")
+    
+    current_scan_job = Thread(target=run_async, daemon=True)
+    current_scan_job.start()
+    
+    return jsonify({'success': True, 'job_id': job_id})
+
+@research_bp.route('/sector/status/<job_id>', methods=['GET'])
+def get_scan_status(job_id):
+    """Get scan status."""
+    global current_scan_job
+    
+    if current_scan_job and current_scan_job.is_alive():
+        return jsonify({'status': 'running', 'job_id': job_id})
+    else:
+        return jsonify({'status': 'completed', 'job_id': job_id})
+
+@research_bp.route('/sector/cancel/<job_id>', methods=['POST'])
+def cancel_scan(job_id):
+    """Cancel running scan (not implemented - scans run to completion)."""
+    return jsonify({'success': False, 'message': 'Cancellation not supported'})
+
+@research_bp.route('/sector/schedule', methods=['GET'])
+def get_schedule_status():
+    """Get scheduler status."""
+    status = sector_scan.get_scheduler_status()
+    return jsonify(status)
+
+@research_bp.route('/sector/schedule', methods=['POST'])
+def update_schedule():
+    """Update scheduler configuration."""
+    data = request.get_json()
+    
+    # Save config
+    sector_scan.save_schedule_config(data)
+    
+    # Start or stop scheduler
+    if data.get('enabled', False):
+        sector_scan.start_scheduler(
+            daily_time=data.get('daily_time', '16:30'),
+            weekly_day=data.get('weekly_day', 'sunday'),
+            weekly_time=data.get('weekly_time', '18:00')
+        )
+    else:
+        sector_scan.stop_scheduler()
+    
+    return jsonify({'success': True})
+
+@research_bp.route('/sector/baskets', methods=['GET'])
+def get_sector_baskets():
+    """Get all sector baskets."""
+    baskets = sector_scan.load_sectors()
+    return jsonify({'sectors': baskets})
+
+@research_bp.route('/sector/baskets', methods=['POST'])
+def update_sector_basket():
+    """Update a sector basket."""
+    data = request.get_json()
+    sector_id = data.get('sector_id')
+    tickers = data.get('tickers', [])
+    
+    baskets_file = sector_scan.BASKETS_FILE
+    with open(baskets_file, 'r') as f:
+        baskets_data = json.load(f)
+    
+    if sector_id in baskets_data.get('sectors', {}):
+        baskets_data['sectors'][sector_id]['tickers'] = tickers
+        
+        with open(baskets_file, 'w') as f:
+            json.dump(baskets_data, f, indent=2)
+        
+        return jsonify({'success': True})
+    
+    return jsonify({'error': 'Sector not found'}), 404
+

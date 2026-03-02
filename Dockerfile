@@ -20,6 +20,8 @@ COPY signals.py .
 COPY backtest.py .
 COPY analytics.py .
 COPY sectors.json .
+COPY sector_scan.py .
+COPY data/ ./data/
 
 # Expose port
 EXPOSE 5002

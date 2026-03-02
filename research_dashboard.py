@@ -39,15 +39,30 @@ RESEARCH_DASHBOARD_HTML = """
             margin-bottom: 30px;
             justify-content: center;
         }
-        .nav a {
+        .nav a, .nav button {
             padding: 10px 20px;
             background: #3a3a52;
             color: #4fc3f7;
             text-decoration: none;
             border-radius: 5px;
             transition: background 0.3s;
+            border: none;
+            cursor: pointer;
+            font-size: 1em;
         }
-        .nav a:hover {
+        .nav a:hover, .nav button:hover {
+            background: #4a4a62;
+        }
+        .nav a.active, .nav button.active {
+            background: #4fc3f7;
+            color: #1e1e2e;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
             background: #4a4a62;
         }
         .section {
@@ -157,8 +172,11 @@ RESEARCH_DASHBOARD_HTML = """
         
         <div class="nav">
             <a href="/">Pattern Scanner</a>
-            <a href="/research">Research Dashboard</a>
+            <button onclick="showTab('signals')" id="tab-signals" class="active">Signal Analysis</button>
+            <button onclick="showTab('sector-scan')" id="tab-sector-scan">Sector Scan</button>
         </div>
+
+        <div id="signals-tab" class="tab-content active">
 
         <div class="section">
             <h2>ℹ️ What This Tool Does</h2>
@@ -168,13 +186,36 @@ RESEARCH_DASHBOARD_HTML = """
             </p>
             <details style="margin-top: 15px;">
                 <summary style="cursor: pointer; color: #4fc3f7; font-weight: 600;">📖 Metric Explanations</summary>
-                <div style="margin-top: 10px; padding: 15px; background: #1e1e2e; border-radius: 5px;">
-                    <p><strong style="color: #4fc3f7;">IC (Information Coefficient)</strong> - Correlation between signal values and future returns. Higher = better predictive power. Good signals have IC > 5%.</p>
-                    <p><strong style="color: #4fc3f7;">Hit Rate</strong> - Percentage of times high-signal stocks outperformed. Above 50% means the signal works more often than not.</p>
-                    <p><strong style="color: #4fc3f7;">Long-Only Return</strong> - Average return from buying top 20% highest-signal stocks. Shows if signal identifies winners.</p>
-                    <p><strong style="color: #4fc3f7;">Long-Short Return</strong> - Return from buying top 20% and shorting bottom 20%. Tests if signal ranks stocks correctly.</p>
-                    <p><strong style="color: #4fc3f7;">Sharpe Ratio</strong> - Risk-adjusted return (return ÷ volatility). Above 1.0 is good, above 2.0 is excellent.</p>
-                    <p><strong style="color: #4fc3f7;">Observations</strong> - Number of signal-return pairs analyzed. More = more reliable results (aim for 100+).</p>
+                <div style="margin-top: 10px; padding: 15px; background: #1e1e2e; border-radius: 5px; line-height: 1.8;">
+                    <p><strong style="color: #4fc3f7;">IC (Information Coefficient)</strong><br>
+                    Correlation between the signal and actual future returns. Ranges from -1 to +1. For sector trend detection:<br>
+                    • Below 0.02 → signal has no real edge, ignore it<br>
+                    • 0.02–0.05 → weak but potentially useful, especially combined with others<br>
+                    • 0.05–0.10 → solid edge, this signal is worth using<br>
+                    • Above 0.10 → strong edge, rare to see, trust it</p>
+                    
+                    <p><strong style="color: #4fc3f7;">Hit Rate</strong><br>
+                    Percentage of times the signal correctly predicted the direction of price movement. For sector work:<br>
+                    • Below 50% → worse than a coin flip, not useful<br>
+                    • 50–55% → marginal, only useful if the wins are bigger than the losses<br>
+                    • 55–60% → good, this signal has real directional accuracy<br>
+                    • Above 60% → excellent for a trend-detection signal</p>
+                    
+                    <p><strong style="color: #4fc3f7;">Long Ret (Long Return)</strong><br>
+                    Average return when you follow the signal's buy recommendation. You want this to be meaningfully positive — at least 1-2% over your backtest horizon. If it's near zero the signal isn't generating real returns even when it's "right."</p>
+                    
+                    <p><strong style="color: #4fc3f7;">L/S Ret (Long/Short Return)</strong><br>
+                    Return of buying the top signal stocks and shorting the bottom signal stocks. For sector work where you're not shorting, focus less on this. But a high L/S return confirms the signal discriminates well between strong and weak sectors.</p>
+                    
+                    <p><strong style="color: #4fc3f7;">L/S Sharpe (Long/Short Sharpe Ratio)</strong><br>
+                    Risk-adjusted return of the long/short portfolio. Arguably the most important single number:<br>
+                    • Below 0.5 → weak, not worth using as a standalone signal<br>
+                    • 0.5–1.0 → acceptable, consider combining with other signals<br>
+                    • 1.0–1.5 → good, this is a real signal with consistent edge<br>
+                    • Above 1.5 → excellent, this signal works reliably</p>
+                    
+                    <p style="margin-bottom: 0;"><strong style="color: #4fc3f7;">Obs (Observations)</strong><br>
+                    Number of data points in the backtest. Your statistical confidence check. Under 100 observations means the results could easily be noise — you can't trust them. For sector baskets of 20-25 stocks over 2 years of daily data you'll typically get plenty of observations, but watch for signals that trigger rarely (like cup & handle) where obs might be low.</p>
                 </div>
             </details>
         </div>
@@ -282,10 +323,280 @@ RESEARCH_DASHBOARD_HTML = """
             </form>
             <div id="corrResults" style="margin-top: 20px;"></div>
         </div>
+        </div>
+
+        <!-- Sector Scan Tab -->
+        <div id="sector-scan-tab" class="tab-content">
+            <div class="section">
+                <h2>🎯 Sector Scan Control Panel</h2>
+                <p style="color: #9e9e9e;">Automated sector analysis with configurable signals and scheduling</p>
+                
+                <div class="grid" style="grid-template-columns: 1fr 1fr;">
+                    <div>
+                        <h3 style="color: #4fc3f7;">Scan Configuration</h3>
+                        <div class="form-group">
+                            <label>Signals to Run</label>
+                            <div style="max-height: 200px; overflow-y: auto; padding: 10px; background: #1e1e2e; border-radius: 5px; margin-top: 5px;">
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check" value="momentum_20" checked> momentum_20 (20-day momentum)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check" value="ma_cross_50_200" checked> ma_cross_50_200 (Golden/Death cross)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check" value="adx_14" checked> adx_14 (Trend strength)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check" value="cto_larsson" checked> cto_larsson (CTO lines)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check" value="rsi_14"> rsi_14 (Oversold/overbought)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check" value="macd"> macd (MACD crossover)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check" value="volume_surge_20"> volume_surge_20 (Volume spike)</label>
+                                <hr style="border-color: #3a3a52; margin: 8px 0;">
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check pattern-signal" value="cup_handle"> cup_handle (Pattern)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check pattern-signal" value="bull_flag"> bull_flag (Pattern)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check pattern-signal" value="asc_triangle"> asc_triangle (Pattern)</label>
+                                <label style="display: block; margin: 3px 0; cursor: pointer;"><input type="checkbox" class="signal-check pattern-signal" value="double_bottom"> double_bottom (Pattern)</label>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Timeframe</label>
+                            <select id="scanTimeframe">
+                                <option value="365">1 Year (recommended for daily)</option>
+                                <option value="730">2 Years (recommended for weekly)</option>
+                                <option value="1095">3 Years</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Minimum Stocks per Sector</label>
+                            <input type="number" id="minStocks" value="15" min="5" max="25">
+                        </div>
+                        <button onclick="runScanNow()" id="runScanBtn">Run Scan Now</button>
+                        <p style="color: #9e9e9e; font-size: 0.9em; margin-top: 10px;">💡 Tip: Pattern signals work best with 2+ year timeframes</p>
+                    </div>
+                    
+                    <div>
+                        <h3 style="color: #4fc3f7;">Automated Scheduling</h3>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="schedulerEnabled" onchange="toggleScheduler()">
+                                Enable Automated Scanning
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label>Daily Scan Time (Weekdays)</label>
+                            <input type="time" id="dailyTime" value="16:30">
+                        </div>
+                        <div class="form-group">
+                            <label>Weekly Scan (Sunday)</label>
+                            <input type="time" id="weeklyTime" value="18:00">
+                        </div>
+                        <div id="schedulerStatus" style="margin-top: 15px; padding: 10px; background: #1e1e2e; border-radius: 5px;">
+                            <p style="margin: 5px 0;"><strong>Status:</strong> <span id="schedStatus">Stopped</span></p>
+                            <p style="margin: 5px 0;"><strong>Next Daily:</strong> <span id="nextDaily">-</span></p>
+                            <p style="margin: 5px 0;"><strong>Next Weekly:</strong> <span id="nextWeekly">-</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>📊 Latest Sector Scorecard</h2>
+                <p style="color: #9e9e9e; margin-bottom: 10px;">
+                    Scanning 19 sectors from your sector baskets. 
+                    <button onclick="showSectorManager()" style="padding: 4px 12px; font-size: 0.9em; background: #4fc3f7; color: #1e1e2e; border: none; border-radius: 3px; cursor: pointer;">Manage Sectors & Tickers</button>
+                </p>
+                <div id="scanProgress" style="display: none; padding: 15px; background: #1e1e2e; border-radius: 5px; margin-bottom: 15px;">
+                    <p style="margin: 0;"><strong>Scan in progress...</strong></p>
+                    <p id="progressText" style="margin: 5px 0 0 0; color: #9e9e9e;">Starting scan...</p>
+                </div>
+                <div id="scorecardResults">
+                    <p style="color: #9e9e9e;">No results yet. Run a scan to see the scorecard.</p>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
         let sectorsData = {};
+        let currentJobId = null;
+
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+            
+            document.getElementById(tabName + '-tab').classList.add('active');
+            document.getElementById('tab-' + tabName).classList.add('active');
+            
+            if (tabName === 'sector-scan') {
+                loadSchedulerStatus();
+                loadLatestResults();
+            }
+        }
+
+        async function loadSchedulerStatus() {
+            try {
+                const response = await fetch('/signals/sector/schedule');
+                const data = await response.json();
+                
+                document.getElementById('schedulerEnabled').checked = data.config.enabled;
+                document.getElementById('dailyTime').value = data.config.daily_time;
+                document.getElementById('weeklyTime').value = data.config.weekly_time;
+                document.getElementById('minStocks').value = data.config.min_stocks;
+                
+                document.getElementById('schedStatus').textContent = data.running ? 'Running' : 'Stopped';
+                document.getElementById('schedStatus').style.color = data.running ? '#4caf50' : '#ef5350';
+                document.getElementById('nextDaily').textContent = data.next_daily ? new Date(data.next_daily).toLocaleString() : '-';
+                document.getElementById('nextWeekly').textContent = data.next_weekly ? new Date(data.next_weekly).toLocaleString() : '-';
+            } catch (error) {
+                console.error('Failed to load scheduler status:', error);
+            }
+        }
+
+        async function toggleScheduler() {
+            const enabled = document.getElementById('schedulerEnabled').checked;
+            const dailyTime = document.getElementById('dailyTime').value;
+            const weeklyTime = document.getElementById('weeklyTime').value;
+            const minStocks = parseInt(document.getElementById('minStocks').value);
+            
+            try {
+                await fetch('/signals/sector/schedule', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        enabled: enabled,
+                        daily_time: dailyTime,
+                        weekly_time: weeklyTime,
+                        weekly_day: 'sunday',
+                        min_stocks: minStocks
+                    })
+                });
+                
+                setTimeout(loadSchedulerStatus, 1000);
+            } catch (error) {
+                alert('Failed to update scheduler: ' + error.message);
+            }
+        }
+
+        async function runScanNow() {
+            const selectedSignals = Array.from(document.querySelectorAll('.signal-check:checked')).map(cb => cb.value);
+            const timeframe = parseInt(document.getElementById('scanTimeframe').value);
+            const minStocks = parseInt(document.getElementById('minStocks').value);
+            const btn = document.getElementById('runScanBtn');
+            
+            if (selectedSignals.length === 0) {
+                alert('Please select at least one signal');
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.textContent = 'Scanning...';
+            document.getElementById('scanProgress').style.display = 'block';
+            
+            try {
+                const response = await fetch('/signals/sector/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ 
+                        mode: 'custom',
+                        min_stocks: minStocks,
+                        signals: selectedSignals
+                    })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentJobId = data.job_id;
+                    document.getElementById('progressText').textContent = `Running ${selectedSignals.length} signals on 19 sectors...`;
+                    checkScanStatus();
+                } else {
+                    alert('Failed to start scan: ' + (data.error || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.textContent = 'Run Scan Now';
+                    document.getElementById('scanProgress').style.display = 'none';
+                }
+            } catch (error) {
+                alert('Failed to start scan: ' + error.message);
+                btn.disabled = false;
+                btn.textContent = 'Run Scan Now';
+                document.getElementById('scanProgress').style.display = 'none';
+            }
+        }
+
+        async function checkScanStatus() {
+            if (!currentJobId) return;
+            
+            try {
+                const response = await fetch(`/signals/sector/status/${currentJobId}`);
+                const data = await response.json();
+                
+                if (data.status === 'running') {
+                    document.getElementById('progressText').textContent = 'Processing sectors...';
+                    setTimeout(checkScanStatus, 3000);
+                } else {
+                    document.getElementById('scanProgress').style.display = 'none';
+                    document.getElementById('runScanBtn').disabled = false;
+                    document.getElementById('runScanBtn').textContent = 'Run Scan Now';
+                    currentJobId = null;
+                    loadLatestResults();
+                }
+            } catch (error) {
+                console.error('Failed to check scan status:', error);
+            }
+        }
+
+        async function loadLatestResults() {
+            try {
+                const response = await fetch('/signals/sector/results');
+                const data = await response.json();
+                
+                if (data.results && data.results.length > 0) {
+                    displayScorecard(data.results, data.timestamp);
+                }
+            } catch (error) {
+                console.error('No results available:', error);
+            }
+        }
+
+        function displayScorecard(results, timestamp) {
+            const date = new Date(timestamp * 1000).toLocaleString();
+            
+            let html = `<p style="color: #9e9e9e; margin-bottom: 15px;">Generated: ${date}</p>`;
+            html += '<div style="overflow-x: auto;"><table><thead><tr>';
+            html += '<th>Rank</th><th>Sector</th><th>Score</th><th>Hit Rate</th><th>Sharpe</th><th>Obs</th><th>Signal</th>';
+            html += '</tr></thead><tbody>';
+            
+            results.forEach(row => {
+                const signalColor = row.trend_signal === 'GREEN' ? '#4caf50' : 
+                                   row.trend_signal === 'YELLOW' ? '#ffc107' : '#ef5350';
+                const sectorLink = `<a href="#" onclick="openSectorManager('${row.sector_id}'); return false;" style="color: #4fc3f7; text-decoration: none;">${row.sector}</a>`;
+                html += `<tr>
+                    <td>${row.rank}</td>
+                    <td style="text-align: left;">${sectorLink}</td>
+                    <td>${row.composite_score.toFixed(3)}</td>
+                    <td>${(row.avg_hit_rate * 100).toFixed(1)}%</td>
+                    <td>${row.avg_sharpe.toFixed(2)}</td>
+                    <td>${row.observations}</td>
+                    <td><span style="color: ${signalColor}; font-weight: bold;">${row.trend_signal}</span></td>
+                </tr>`;
+            });
+            
+            html += '</tbody></table></div>';
+            document.getElementById('scorecardResults').innerHTML = html;
+        }
+
+        function openSectorManager(sectorId) {
+            showTab('signals');
+            showSectorManager();
+            // Scroll to sector if possible
+            setTimeout(() => {
+                const sectorElements = document.querySelectorAll('#sectorList h4');
+                sectorElements.forEach(el => {
+                    if (el.textContent.includes(sectorId)) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        el.style.backgroundColor = '#4fc3f7';
+                        el.style.color = '#1e1e2e';
+                        setTimeout(() => {
+                            el.style.backgroundColor = '';
+                            el.style.color = '';
+                        }, 2000);
+                    }
+                });
+            }, 500);
+        }
 
         async function loadSectors() {
             try {

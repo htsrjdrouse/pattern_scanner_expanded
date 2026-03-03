@@ -8,6 +8,7 @@ import json
 import os
 import base64
 from io import BytesIO
+from pathlib import Path
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from flask import Flask, render_template_string, request, Response, flash, redirect
@@ -2013,6 +2014,7 @@ def home():
             <a href="/">Home</a>
             <a href="/tracked">Tracked Stocks</a>
             <a href="/research">🔬 Alpha Research</a>
+            <a href="/saved-results">📁 Saved Results</a>
         </div>
         <h1>🏆 Stock Pattern Scanner <span class="new-badge">ENHANCED</span></h1>
         <p>Multi-pattern detection with DCF valuation and advanced charting.</p>
@@ -2104,8 +2106,29 @@ def scan():
             pass
 
     results = scan_for_patterns(tickers=tickers, progress_callback=progress)
+    
+    # Save results to file
+    import json
+    from datetime import datetime
+    scan_data = {
+        'timestamp': datetime.now().isoformat(),
+        'market': market_name,
+        'results': results
+    }
+    scan_file = Path('data/last_scan_results.json')
+    scan_file.parent.mkdir(exist_ok=True)
+    with open(scan_file, 'w') as f:
+        json.dump(scan_data, f, default=str)
 
-    html = """
+    return render_template_string(SCAN_RESULTS_TEMPLATE, 
+                                  results=results, 
+                                  now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                  market=market,
+                                  market_name=market_name,
+                                  is_saved=False)
+
+
+SCAN_RESULTS_TEMPLATE = """
     <html>
     <head>
         <title>Stock Pattern Scanner Scan Results</title>
@@ -2116,6 +2139,14 @@ def scan():
             .navbar { background: #16213e; padding: 10px; border-radius: 8px; margin-bottom: 20px; }
             .navbar a { color: #00d4ff; text-decoration: none; margin: 0 15px; }
             .navbar a:hover { text-decoration: underline; }
+            .filter-controls { background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+            .filter-controls button { background: #00d4ff; color: #1a1a2e; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin-right: 10px; font-weight: bold; }
+            .filter-controls button:hover { background: #00a8cc; }
+            .tier-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 11px; }
+            .tier1 { background: #4caf50; color: white; }
+            .tier2 { background: #2196f3; color: white; }
+            .tier3 { background: #ff9800; color: white; }
+            .excluded { background: #f44336; color: white; }
             table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 12px; }
             th, td { border: 1px solid #333; padding: 8px; text-align: center; white-space: nowrap; }
             th { background: #16213e; color: #00d4ff; position: sticky; top: 0; }
@@ -2152,10 +2183,130 @@ def scan():
             <a href="/">Home</a>
             <a href="/tracked">Tracked Stocks</a>
             <a href="/research">🔬 Alpha Research</a>
+            <a href="/saved-results">📁 Saved Results</a>
+            {% if is_saved %}
+            <a href="/scan?market={{ market }}" style="background: #4caf50; padding: 8px 15px; border-radius: 5px; margin-left: 20px;">🔄 Re-run Scan</a>
+            {% endif %}
         </div>
-        <h1>🏆 Stock Pattern Scanner Scan Results</h1>
+        <h1>🏆 Stock Pattern Scanner {% if is_saved %}Saved {% endif %}Results</h1>
         <p><strong>Market:</strong> {{ market_name }} | <strong>Pattern:</strong> All Patterns | 
-           <strong>Scanned:</strong> {{ now }} | <strong>Found:</strong> {{ results|length }} patterns</p>
+           <strong>{% if is_saved %}Saved{% else %}Scanned{% endif %}:</strong> {{ now }} | <strong>Found:</strong> {{ results|length }} patterns</p>
+
+        <div class="filter-controls">
+            <button onclick="applyScreening()">🎯 Apply Tier Screening</button>
+            <button onclick="showAll()">📋 Show All Results</button>
+            <button onclick="showTier(1)">🥇 Tier 1 Only</button>
+            <button onclick="showTier(2)">🥈 Tier 2 Only</button>
+            <button onclick="showTier(3)">🥉 Tier 3 Only</button>
+            <button onclick="toggleSettings()">⚙️ Adjust Parameters</button>
+            <span id="filterStatus" style="margin-left: 20px; color: #00d4ff;"></span>
+        </div>
+
+        <div id="screeningSettings" style="display: none; background: #16213e; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+            <h3 style="color: #00d4ff; margin-top: 0;">Screening Parameters</h3>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;">
+                <div>
+                    <h4 style="color: #4caf50; margin-bottom: 10px;">🥇 Tier 1 - High Conviction</h4>
+                    <label style="display: block; margin: 8px 0;">
+                        Volume: <input type="number" id="t1_vol" value="0.7" step="0.1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">x
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        ADX: <input type="number" id="t1_adx" value="25" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        RSI Min: <input type="number" id="t1_rsi_min" value="50" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        RSI Max: <input type="number" id="t1_rsi_max" value="70" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        U-Shape: <input type="number" id="t1_ushape" value="0.40" step="0.05" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        R:R: <input type="number" id="t1_rr" value="1.5" step="0.1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">:1+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        <input type="checkbox" id="t1_dcf" checked> Require DCF > 0%
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        <input type="checkbox" id="t1_macd" checked> Require MACD ✔
+                    </label>
+                </div>
+                
+                <div>
+                    <h4 style="color: #2196f3; margin-bottom: 10px;">🥈 Tier 2 - Strong Setup</h4>
+                    <label style="display: block; margin: 8px 0;">
+                        Volume: <input type="number" id="t2_vol" value="0.55" step="0.05" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">x
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        ADX: <input type="number" id="t2_adx" value="25" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        RSI Min: <input type="number" id="t2_rsi_min" value="50" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        RSI Max: <input type="number" id="t2_rsi_max" value="70" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        U-Shape: <input type="number" id="t2_ushape" value="0.35" step="0.05" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        R:R: <input type="number" id="t2_rr" value="1.5" step="0.1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">:1+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        <input type="checkbox" id="t2_dcf" checked> Require DCF > 0%
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        <input type="checkbox" id="t2_macd" checked> Require MACD ✔
+                    </label>
+                </div>
+                
+                <div>
+                    <h4 style="color: #ff9800; margin-bottom: 10px;">🥉 Tier 3 - Watchlist</h4>
+                    <label style="display: block; margin: 8px 0;">
+                        Volume: <input type="number" id="t3_vol" value="0.3" step="0.05" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">x
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        ADX: <input type="number" id="t3_adx" value="25" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        RSI Min: <input type="number" id="t3_rsi_min" value="50" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        RSI Max: <input type="number" id="t3_rsi_max" value="70" step="1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        U-Shape: <input type="number" id="t3_ushape" value="0.40" step="0.05" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        R:R: <input type="number" id="t3_rr" value="1.5" step="0.1" style="width: 60px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;">:1+
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        <input type="checkbox" id="t3_dcf"> Require DCF > 0%
+                    </label>
+                    <label style="display: block; margin: 8px 0;">
+                        <input type="checkbox" id="t3_macd" checked> Require MACD ✔
+                    </label>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #333;">
+                <h4 style="color: #f44336; margin-bottom: 10px;">❌ Auto-Disqualifiers</h4>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                    <label>RSI > <input type="number" id="excl_rsi_max" value="80" step="1" style="width: 50px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;"> (overbought)</label>
+                    <label>RSI < <input type="number" id="excl_rsi_min" value="45" step="1" style="width: 50px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;"> (weak)</label>
+                    <label>ADX < <input type="number" id="excl_adx" value="10" step="1" style="width: 50px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;"> (no trend)</label>
+                    <label>U-Shape < <input type="number" id="excl_ushape" value="0.05" step="0.01" style="width: 50px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;"> (distorted)</label>
+                    <label>R:R < <input type="number" id="excl_rr" value="1.0" step="0.1" style="width: 50px; background: #1a1a2e; color: #eee; border: 1px solid #333; padding: 4px;"> (poor risk)</label>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px; text-align: center;">
+                <button onclick="resetDefaults()" style="background: #666; margin-right: 10px;">Reset to Defaults</button>
+                <button onclick="savePreset()" style="background: #4caf50; margin-right: 10px;">Save Preset</button>
+                <button onclick="toggleSettings()">Close</button>
+            </div>
+        </div>
 
         <div class="summary">
             <strong>Status:</strong>
@@ -2250,6 +2401,302 @@ def scan():
             </tr>
             {% endfor %}
         </table>
+
+        <script>
+        function toggleSettings() {
+            const settings = document.getElementById('screeningSettings');
+            settings.style.display = settings.style.display === 'none' ? 'block' : 'none';
+        }
+        
+        function resetDefaults() {
+            document.getElementById('t1_vol').value = 0.7;
+            document.getElementById('t1_adx').value = 25;
+            document.getElementById('t1_rsi_min').value = 50;
+            document.getElementById('t1_rsi_max').value = 70;
+            document.getElementById('t1_ushape').value = 0.40;
+            document.getElementById('t1_rr').value = 1.5;
+            document.getElementById('t1_dcf').checked = true;
+            document.getElementById('t1_macd').checked = true;
+            
+            document.getElementById('t2_vol').value = 0.55;
+            document.getElementById('t2_adx').value = 25;
+            document.getElementById('t2_rsi_min').value = 50;
+            document.getElementById('t2_rsi_max').value = 70;
+            document.getElementById('t2_ushape').value = 0.35;
+            document.getElementById('t2_rr').value = 1.5;
+            document.getElementById('t2_dcf').checked = true;
+            document.getElementById('t2_macd').checked = true;
+            
+            document.getElementById('t3_vol').value = 0.3;
+            document.getElementById('t3_adx').value = 25;
+            document.getElementById('t3_rsi_min').value = 50;
+            document.getElementById('t3_rsi_max').value = 70;
+            document.getElementById('t3_ushape').value = 0.40;
+            document.getElementById('t3_rr').value = 1.5;
+            document.getElementById('t3_dcf').checked = false;
+            document.getElementById('t3_macd').checked = true;
+            
+            document.getElementById('excl_rsi_max').value = 80;
+            document.getElementById('excl_rsi_min').value = 45;
+            document.getElementById('excl_adx').value = 10;
+            document.getElementById('excl_ushape').value = 0.05;
+            document.getElementById('excl_rr').value = 1.0;
+        }
+        
+        function savePreset() {
+            const preset = {
+                t1: {
+                    vol: parseFloat(document.getElementById('t1_vol').value),
+                    adx: parseFloat(document.getElementById('t1_adx').value),
+                    rsi_min: parseFloat(document.getElementById('t1_rsi_min').value),
+                    rsi_max: parseFloat(document.getElementById('t1_rsi_max').value),
+                    ushape: parseFloat(document.getElementById('t1_ushape').value),
+                    rr: parseFloat(document.getElementById('t1_rr').value),
+                    dcf: document.getElementById('t1_dcf').checked,
+                    macd: document.getElementById('t1_macd').checked
+                },
+                t2: {
+                    vol: parseFloat(document.getElementById('t2_vol').value),
+                    adx: parseFloat(document.getElementById('t2_adx').value),
+                    rsi_min: parseFloat(document.getElementById('t2_rsi_min').value),
+                    rsi_max: parseFloat(document.getElementById('t2_rsi_max').value),
+                    ushape: parseFloat(document.getElementById('t2_ushape').value),
+                    rr: parseFloat(document.getElementById('t2_rr').value),
+                    dcf: document.getElementById('t2_dcf').checked,
+                    macd: document.getElementById('t2_macd').checked
+                },
+                t3: {
+                    vol: parseFloat(document.getElementById('t3_vol').value),
+                    adx: parseFloat(document.getElementById('t3_adx').value),
+                    rsi_min: parseFloat(document.getElementById('t3_rsi_min').value),
+                    rsi_max: parseFloat(document.getElementById('t3_rsi_max').value),
+                    ushape: parseFloat(document.getElementById('t3_ushape').value),
+                    rr: parseFloat(document.getElementById('t3_rr').value),
+                    dcf: document.getElementById('t3_dcf').checked,
+                    macd: document.getElementById('t3_macd').checked
+                },
+                excl: {
+                    rsi_max: parseFloat(document.getElementById('excl_rsi_max').value),
+                    rsi_min: parseFloat(document.getElementById('excl_rsi_min').value),
+                    adx: parseFloat(document.getElementById('excl_adx').value),
+                    ushape: parseFloat(document.getElementById('excl_ushape').value),
+                    rr: parseFloat(document.getElementById('excl_rr').value)
+                }
+            };
+            localStorage.setItem('screeningPreset', JSON.stringify(preset));
+            alert('Preset saved! It will be loaded automatically next time.');
+        }
+        
+        function loadPreset() {
+            const saved = localStorage.getItem('screeningPreset');
+            if (saved) {
+                const preset = JSON.parse(saved);
+                document.getElementById('t1_vol').value = preset.t1.vol;
+                document.getElementById('t1_adx').value = preset.t1.adx;
+                document.getElementById('t1_rsi_min').value = preset.t1.rsi_min;
+                document.getElementById('t1_rsi_max').value = preset.t1.rsi_max;
+                document.getElementById('t1_ushape').value = preset.t1.ushape;
+                document.getElementById('t1_rr').value = preset.t1.rr;
+                document.getElementById('t1_dcf').checked = preset.t1.dcf;
+                document.getElementById('t1_macd').checked = preset.t1.macd;
+                
+                document.getElementById('t2_vol').value = preset.t2.vol;
+                document.getElementById('t2_adx').value = preset.t2.adx;
+                document.getElementById('t2_rsi_min').value = preset.t2.rsi_min;
+                document.getElementById('t2_rsi_max').value = preset.t2.rsi_max;
+                document.getElementById('t2_ushape').value = preset.t2.ushape;
+                document.getElementById('t2_rr').value = preset.t2.rr;
+                document.getElementById('t2_dcf').checked = preset.t2.dcf;
+                document.getElementById('t2_macd').checked = preset.t2.macd;
+                
+                document.getElementById('t3_vol').value = preset.t3.vol;
+                document.getElementById('t3_adx').value = preset.t3.adx;
+                document.getElementById('t3_rsi_min').value = preset.t3.rsi_min;
+                document.getElementById('t3_rsi_max').value = preset.t3.rsi_max;
+                document.getElementById('t3_ushape').value = preset.t3.ushape;
+                document.getElementById('t3_rr').value = preset.t3.rr;
+                document.getElementById('t3_dcf').checked = preset.t3.dcf;
+                document.getElementById('t3_macd').checked = preset.t3.macd;
+                
+                document.getElementById('excl_rsi_max').value = preset.excl.rsi_max;
+                document.getElementById('excl_rsi_min').value = preset.excl.rsi_min;
+                document.getElementById('excl_adx').value = preset.excl.adx;
+                document.getElementById('excl_ushape').value = preset.excl.ushape;
+                document.getElementById('excl_rr').value = preset.excl.rr;
+            }
+        }
+        
+        // Load preset on page load
+        window.addEventListener('load', loadPreset);
+        
+        function applyScreening() {
+            const rows = document.querySelectorAll('table tr');
+            console.log('Total rows found:', rows.length);
+            let tier1 = 0, tier2 = 0, tier3 = 0, excluded = 0;
+            
+            // Get parameters
+            const t1 = {
+                vol: parseFloat(document.getElementById('t1_vol').value),
+                adx: parseFloat(document.getElementById('t1_adx').value),
+                rsi_min: parseFloat(document.getElementById('t1_rsi_min').value),
+                rsi_max: parseFloat(document.getElementById('t1_rsi_max').value),
+                ushape: parseFloat(document.getElementById('t1_ushape').value),
+                rr: parseFloat(document.getElementById('t1_rr').value),
+                dcf: document.getElementById('t1_dcf').checked,
+                macd: document.getElementById('t1_macd').checked
+            };
+            console.log('Tier 1 params:', t1);
+            const t2 = {
+                vol: parseFloat(document.getElementById('t2_vol').value),
+                adx: parseFloat(document.getElementById('t2_adx').value),
+                rsi_min: parseFloat(document.getElementById('t2_rsi_min').value),
+                rsi_max: parseFloat(document.getElementById('t2_rsi_max').value),
+                ushape: parseFloat(document.getElementById('t2_ushape').value),
+                rr: parseFloat(document.getElementById('t2_rr').value),
+                dcf: document.getElementById('t2_dcf').checked,
+                macd: document.getElementById('t2_macd').checked
+            };
+            const t3 = {
+                vol: parseFloat(document.getElementById('t3_vol').value),
+                adx: parseFloat(document.getElementById('t3_adx').value),
+                rsi_min: parseFloat(document.getElementById('t3_rsi_min').value),
+                rsi_max: parseFloat(document.getElementById('t3_rsi_max').value),
+                ushape: parseFloat(document.getElementById('t3_ushape').value),
+                rr: parseFloat(document.getElementById('t3_rr').value),
+                dcf: document.getElementById('t3_dcf').checked,
+                macd: document.getElementById('t3_macd').checked
+            };
+            const excl = {
+                rsi_max: parseFloat(document.getElementById('excl_rsi_max').value),
+                rsi_min: parseFloat(document.getElementById('excl_rsi_min').value),
+                adx: parseFloat(document.getElementById('excl_adx').value),
+                ushape: parseFloat(document.getElementById('excl_ushape').value),
+                rr: parseFloat(document.getElementById('excl_rr').value)
+            };
+            
+            rows.forEach(row => {
+                const cells = row.cells;
+                if (!cells || cells.length < 10 || row.querySelector('th')) return; // Skip header row
+                
+                // Parse values
+                const rsi = parseFloat(cells[13]?.textContent) || 0;
+                const adx = parseFloat(cells[14]?.textContent) || 0;
+                const volText = cells[15]?.textContent || '0';
+                const volMult = parseFloat(volText.replace('x', '')) || 0;
+                const cupAnalysis = cells[11]?.textContent || '';
+                const uShapeMatch = cupAnalysis.match(/U-shape:\s*([\d.]+)/);
+                const uShape = uShapeMatch ? parseFloat(uShapeMatch[1]) : 0;
+                const rrText = cells[21]?.textContent || '0:1';
+                const rr = parseFloat(rrText.split(':')[0]) || 0;
+                const dcfText = cells[23]?.textContent || '0%';
+                const dcfMargin = parseFloat(dcfText.replace('%', '').replace(',', '')) || 0;
+                const macdCheck = cells[18]?.textContent?.includes('✔') || false;
+                
+                // Debug first row only
+                if (cells[0]?.textContent === 'EXR') {
+                    console.log('Sample values for EXR:', {
+                        rsi, adx, volMult, uShape, rr, dcfMargin, macdCheck,
+                        cell13: cells[13]?.textContent,
+                        cell14: cells[14]?.textContent,
+                        cell15: cells[15]?.textContent,
+                        cell11: cells[11]?.textContent,
+                        cell21: cells[21]?.textContent,
+                        cell23: cells[23]?.textContent,
+                        cell18: cells[18]?.textContent
+                    });
+                }
+                
+                // Remove existing badges
+                const existingBadge = cells[0].querySelector('.tier-badge');
+                if (existingBadge) existingBadge.remove();
+                
+                // Auto disqualifiers
+                if (rsi > excl.rsi_max || rsi < excl.rsi_min || adx < excl.adx || 
+                    uShape < excl.ushape || rr < excl.rr) {
+                    row.style.opacity = '0.3';
+                    row.style.backgroundColor = '';
+                    row.dataset.tier = 'excluded';
+                    excluded++;
+                    return;
+                }
+                
+                // Tier 1
+                if (volMult >= t1.vol && adx >= t1.adx && rsi >= t1.rsi_min && rsi <= t1.rsi_max && 
+                    uShape >= t1.ushape && rr >= t1.rr && 
+                    (!t1.dcf || dcfMargin > 0) && (!t1.macd || macdCheck)) {
+                    row.style.backgroundColor = '#1b5e20';
+                    row.style.opacity = '1';
+                    row.dataset.tier = '1';
+                    const badge = document.createElement('span');
+                    badge.className = 'tier-badge tier1';
+                    badge.textContent = 'TIER 1';
+                    cells[0].insertBefore(badge, cells[0].firstChild);
+                    tier1++;
+                }
+                // Tier 2
+                else if (volMult >= t2.vol && adx >= t2.adx && rsi >= t2.rsi_min && rsi <= t2.rsi_max && 
+                         uShape >= t2.ushape && rr >= t2.rr && 
+                         (!t2.dcf || dcfMargin > 0) && (!t2.macd || macdCheck)) {
+                    row.style.backgroundColor = '#0d47a1';
+                    row.style.opacity = '1';
+                    row.dataset.tier = '2';
+                    const badge = document.createElement('span');
+                    badge.className = 'tier-badge tier2';
+                    badge.textContent = 'TIER 2';
+                    cells[0].insertBefore(badge, cells[0].firstChild);
+                    tier2++;
+                }
+                // Tier 3
+                else if (volMult >= t3.vol && adx >= t3.adx && rsi >= t3.rsi_min && rsi <= t3.rsi_max && 
+                         uShape >= t3.ushape && rr >= t3.rr && 
+                         (!t3.dcf || dcfMargin > 0) && (!t3.macd || macdCheck)) {
+                    row.style.backgroundColor = '#e65100';
+                    row.style.opacity = '1';
+                    row.dataset.tier = '3';
+                    const badge = document.createElement('span');
+                    badge.className = 'tier-badge tier3';
+                    badge.textContent = 'TIER 3';
+                    cells[0].insertBefore(badge, cells[0].firstChild);
+                    tier3++;
+                }
+                else {
+                    row.style.opacity = '0.5';
+                    row.style.backgroundColor = '';
+                    row.dataset.tier = 'other';
+                }
+            });
+            
+            document.getElementById('filterStatus').innerHTML = 
+                `🥇 Tier 1: ${tier1} | 🥈 Tier 2: ${tier2} | 🥉 Tier 3: ${tier3} | ❌ Excluded: ${excluded}`;
+        }
+        
+        function showAll() {
+            const rows = document.querySelectorAll('table tr');
+            rows.forEach(row => {
+                if (row.querySelector('th')) return; // Skip header
+                row.style.display = '';
+                row.style.opacity = '1';
+            });
+            document.getElementById('filterStatus').textContent = 'Showing all results';
+        }
+        
+        function showTier(tier) {
+            const rows = document.querySelectorAll('table tr');
+            let count = 0;
+            rows.forEach(row => {
+                if (row.querySelector('th')) return; // Skip header
+                if (row.dataset.tier === String(tier)) {
+                    row.style.display = '';
+                    row.style.opacity = '1';
+                    count++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            document.getElementById('filterStatus').textContent = `Showing Tier ${tier} only (${count} stocks)`;
+        }
+        </script>
+
         {% else %}
         <p style="color: #ff9800; font-size: 18px;">No cup & handle patterns found in current scan.</p>
         {% endif %}
@@ -2257,10 +2704,6 @@ def scan():
     </body>
     </html>
     """
-
-    return render_template_string(html, results=results, now=datetime.now().strftime("%Y-%m-%d %H:%M"),
-                                  market=market, market_name=market_name)
-
 
 @app.route("/chart")
 def chart_search():
@@ -2270,6 +2713,41 @@ def chart_search():
         return "Please enter a stock symbol", 400
     from flask import redirect
     return redirect(f"/chart/{symbol}")
+
+
+@app.route("/saved-results")
+def saved_results():
+    """View saved scan results with adjustable screening."""
+    import json
+    from datetime import datetime
+    
+    scan_file = Path('data/last_scan_results.json')
+    if not scan_file.exists():
+        return """
+        <html>
+        <head><title>No Saved Results</title></head>
+        <body style="font-family: Arial; background: #1a1a2e; color: #eee; padding: 40px; text-align: center;">
+            <h1>No Saved Scan Results</h1>
+            <p>Run a scan first to save results.</p>
+            <a href="/" style="color: #00d4ff;">Go to Home</a>
+        </body>
+        </html>
+        """
+    
+    with open(scan_file, 'r') as f:
+        scan_data = json.load(f)
+    
+    results = scan_data['results']
+    market_name = scan_data['market']
+    timestamp = scan_data['timestamp']
+    
+    # Reuse the same HTML template from scan() but with saved data
+    return render_template_string(SCAN_RESULTS_TEMPLATE, 
+                                  results=results, 
+                                  now=timestamp,
+                                  market=market_name.lower().replace(' ', '_'),
+                                  market_name=market_name,
+                                  is_saved=True)
 
 
 @app.route("/chart/<symbol>")

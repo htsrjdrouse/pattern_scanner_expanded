@@ -1,0 +1,105 @@
+feat: Add IV-aware options strategy selector with regime detection and expected move analysis
+
+BREAKING CHANGE: Replaced static Bull Call Spread recommendations with dynamic
+strategy selection based on market conditions.
+
+## Major Features
+
+### 1. IV-Aware Strategy Selector
+- Calculates IV rank (0-100) using 52-week IV range from options chain
+- Fetches current VIX level for market volatility assessment
+- Dynamically selects optimal strategy based on conditions:
+  * Long Call: IV rank < 35 AND VIX < 20 (buy premium in low IV)
+  * Cash-Secured Put: IV rank >= 65 (sell premium in high IV)
+  * Poor Man's Covered Call: IV rank 35-64 (diagonal spread)
+  * Iron Condor: Range-bound regime override (ADX < 20)
+
+### 2. Regime Detection Integration
+- Classifies market regime using ADX and CTO Larsson lines:
+  * TRENDING_BULLISH: ADX > 25 AND CTO bullish (yellow fill)
+  * TRENDING_BEARISH: ADX > 25 AND CTO bearish (blue fill)
+  * RANGE_BOUND: ADX < 20
+  * TRANSITIONING: ADX 20-25
+- Applies regime override rules:
+  * Bearish trends: Suppresses options, shows warning
+  * Range-bound + low IV: Recommends Iron Condor instead of Long Call
+  * Bullish/transitioning: Uses IV-based selection
+
+### 3. Expected Move Analysis Panel
+- Calculates IV-based expected moves:
+  * 1-week: price * IV * sqrt(5/252)
+  * 1-month: price * IV * sqrt(21/252)
+  * 45-day: price * IV * sqrt(45/252)
+- Delta-to-probability translation table:
+  * Shows actual strikes at 0.30, 0.20, 0.15, 0.10 delta
+  * Displays probability OTM and distance from current price
+- Pattern target comparison:
+  * Compares pattern target to 45-day expected move
+  * Warns if target exceeds expected move range
+  * Suggests longer-dated options (60-90 DTE) when needed
+
+## Technical Implementation
+
+### New Functions
+- `calculate_iv_rank(symbol)`: Computes 52-week IV rank
+- `get_vix()`: Fetches current VIX level
+- `classify_regime(df, adx, cto_bullish)`: Market regime classification
+- `calculate_expected_move(symbol, price, target)`: Expected move calculations
+- `_build_long_call()`: Long call strategy builder
+- `_build_cash_secured_put()`: CSP strategy builder
+- `_build_pmcc()`: Poor Man's Covered Call builder
+- `_build_iron_condor()`: Iron condor builder
+
+### Modified Functions
+- `suggest_bull_call_spread()`: Now acts as IV-aware strategy router
+  * Accepts `df` parameter for regime detection
+  * Reuses ADX from existing analysis
+  * Computes CTO Larsson status from price data
+  * Returns regime-aware strategy recommendation
+
+### UI Updates
+- Options Conditions summary box showing:
+  * IV Rank, VIX, IV Regime
+  * Trend Regime classification with description
+  * Strategy rationale
+- Strategy-specific display sections:
+  * Long Call: 2-column layout with strike, premium, risk/reward
+  * Cash-Secured Put: Premium collected, effective entry, breakeven
+  * PMCC: 3-column layout with long/short legs and position details
+  * Iron Condor: Call/put spreads with profit zone
+- Expected Move Analysis panel:
+  * Expected moves table
+  * Pattern target comparison
+  * Delta-based probability table
+- Regime override warning for bearish trends
+
+## Data Reuse
+- ADX: Reused from existing breakout analysis
+- CTO Larsson: Computed from df using existing ta.ema() logic
+- No additional API calls required
+
+## Error Handling
+- Graceful fallbacks: IV rank defaults to 50, VIX to 20
+- Missing options data: Shows friendly message instead of crashing
+- Template syntax: Fixed missing endif tags
+
+## Files Modified
+- pattern_scanner.py:
+  * Lines 230-856: IV-aware strategy selector and builders
+  * Lines 858-940: Expected move calculation
+  * Lines 3239-3258: Chart route updates
+  * Lines 3750-3940: HTML template updates
+- README.md: Updated features section
+
+## Documentation
+- IV_STRATEGY_CHANGES.md: IV-aware selector implementation
+- REGIME_INTEGRATION.md: Regime detection integration
+- EXPECTED_MOVE_IMPLEMENTATION.md: Expected move panel details
+
+## Testing
+- Decision tree logic verified with test cases
+- Regime detection tested across all classifications
+- Syntax validation passed
+- Docker container rebuilt and tested
+
+Closes #N/A

@@ -25,6 +25,7 @@ def backup_to_json(session):
         for t in trades:
             backup_data.append({
                 'id': t.id,
+                'trade_type': t.trade_type,
                 'symbol': t.symbol,
                 'entry_date': t.entry_date.isoformat() if t.entry_date else None,
                 'entry_time': t.entry_time,
@@ -41,6 +42,14 @@ def backup_to_json(session):
                 'adx_at_entry': t.adx_at_entry,
                 'rsi_at_entry': t.rsi_at_entry,
                 'sector': t.sector,
+                'option_strategy': t.option_strategy,
+                'option_expiration': t.option_expiration.isoformat() if t.option_expiration else None,
+                'option_strike': t.option_strike,
+                'option_strike_2': t.option_strike_2,
+                'option_type': t.option_type,
+                'option_dte': t.option_dte,
+                'option_iv': t.option_iv,
+                'option_delta': t.option_delta,
                 'exit_date': t.exit_date.isoformat() if t.exit_date else None,
                 'exit_time': t.exit_time,
                 'exit_price': t.exit_price,
@@ -85,6 +94,7 @@ def restore_from_json():
             
             trade = Trade(
                 id=data['id'],
+                trade_type=data.get('trade_type', 'stock'),
                 symbol=data['symbol'],
                 entry_date=datetime.fromisoformat(data['entry_date']).date() if data['entry_date'] else None,
                 entry_time=data['entry_time'],
@@ -101,6 +111,14 @@ def restore_from_json():
                 adx_at_entry=data['adx_at_entry'],
                 rsi_at_entry=data['rsi_at_entry'],
                 sector=data['sector'],
+                option_strategy=data.get('option_strategy'),
+                option_expiration=datetime.fromisoformat(data['option_expiration']).date() if data.get('option_expiration') else None,
+                option_strike=data.get('option_strike'),
+                option_strike_2=data.get('option_strike_2'),
+                option_type=data.get('option_type'),
+                option_dte=data.get('option_dte'),
+                option_iv=data.get('option_iv'),
+                option_delta=data.get('option_delta'),
                 exit_date=datetime.fromisoformat(data['exit_date']).date() if data['exit_date'] else None,
                 exit_time=data['exit_time'],
                 exit_price=data['exit_price'],
@@ -183,12 +201,15 @@ class Trade(Base):
     # Primary key
     id = Column(Integer, primary_key=True)
     
+    # Trade type
+    trade_type = Column(String(20), default='stock')  # stock, option
+    
     # Entry data
     symbol = Column(String(10), nullable=False)
     entry_date = Column(Date, nullable=False, default=date.today)
     entry_time = Column(String(20))  # e.g., "6:57 AM PST"
     entry_price = Column(Float, nullable=False)
-    shares = Column(Float, nullable=False)  # Number of shares purchased (supports fractional)
+    shares = Column(Float, nullable=False)  # Number of shares purchased (supports fractional) OR contracts for options
     planned_entry = Column(Float)
     pattern_type = Column(String(50))  # cup_handle, bull_flag, double_bottom, ascending_triangle, mixed
     scanner_score = Column(Integer)
@@ -200,6 +221,16 @@ class Trade(Base):
     adx_at_entry = Column(Float)
     rsi_at_entry = Column(Float)
     sector = Column(String(50))
+    
+    # Options-specific fields
+    option_strategy = Column(String(50))  # long_call, cash_secured_put, pmcc, iron_condor, bull_call_spread
+    option_expiration = Column(Date)
+    option_strike = Column(Float)  # Primary strike (or short strike for spreads)
+    option_strike_2 = Column(Float)  # Long strike for spreads
+    option_type = Column(String(10))  # call, put
+    option_dte = Column(Integer)  # Days to expiration at entry
+    option_iv = Column(Float)  # IV at entry
+    option_delta = Column(Float)  # Delta at entry
     
     # Exit data
     exit_date = Column(Date)
@@ -220,11 +251,18 @@ class Trade(Base):
     
     def compute_metrics(self):
         """Calculate all computed fields"""
-        if self.status == 'closed' and self.exit_price and self.shares:
-            # P&L (total dollars based on shares)
-            price_diff = self.exit_price - self.entry_price
-            self.pnl_dollars = price_diff * self.shares
-            self.pnl_percent = (price_diff / self.entry_price) * 100
+        if self.status == 'closed' and self.exit_price:
+            if self.trade_type == 'option':
+                # Options: entry_price and exit_price are per-contract premiums
+                # shares field contains number of contracts
+                price_diff = self.exit_price - self.entry_price
+                self.pnl_dollars = price_diff * self.shares * 100  # Each contract = 100 shares
+                self.pnl_percent = (price_diff / self.entry_price) * 100 if self.entry_price > 0 else 0
+            else:
+                # Stocks: standard calculation
+                price_diff = self.exit_price - self.entry_price
+                self.pnl_dollars = price_diff * self.shares
+                self.pnl_percent = (price_diff / self.entry_price) * 100
             
             # Win/Loss
             self.win = self.exit_price > self.entry_price

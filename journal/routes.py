@@ -48,6 +48,7 @@ def new_trade():
         session = get_session()
         
         # Get form data
+        trade_type = request.form.get('trade_type', 'stock')
         symbol = request.form.get('symbol', '').upper()
         entry_date_str = request.form.get('entry_date')
         entry_date = datetime.strptime(entry_date_str, '%Y-%m-%d').date()
@@ -67,7 +68,7 @@ def new_trade():
                     adx_val = indicators['adx']
                 if not rsi_val:
                     rsi_val = indicators['rsi']
-                if not entry_price_val:
+                if not entry_price_val and trade_type == 'stock':
                     entry_price_val = indicators['price']
                 # Only auto-set checkboxes if they weren't manually checked
                 if not vol_confirmed:
@@ -76,6 +77,7 @@ def new_trade():
                     gold_cross = indicators['golden_cross']
         
         trade = Trade(
+            trade_type=trade_type,
             symbol=symbol,
             entry_date=entry_date,
             entry_time=request.form.get('entry_time', ''),
@@ -93,6 +95,19 @@ def new_trade():
             sector=request.form.get('sector'),
             notes=request.form.get('notes')
         )
+        
+        # Options-specific fields
+        if trade_type == 'option':
+            trade.option_strategy = request.form.get('option_strategy')
+            exp_str = request.form.get('option_expiration')
+            if exp_str:
+                trade.option_expiration = datetime.strptime(exp_str, '%Y-%m-%d').date()
+            trade.option_strike = float(request.form.get('option_strike', 0) or 0)
+            trade.option_strike_2 = float(request.form.get('option_strike_2', 0) or 0) if request.form.get('option_strike_2') else None
+            trade.option_type = request.form.get('option_type')
+            trade.option_dte = int(request.form.get('option_dte', 0) or 0)
+            trade.option_iv = float(request.form.get('option_iv', 0) or 0) if request.form.get('option_iv') else None
+            trade.option_delta = float(request.form.get('option_delta', 0) or 0) if request.form.get('option_delta') else None
         
         trade.compute_metrics()
         session.add(trade)
@@ -477,6 +492,14 @@ NEW_TRADE_TEMPLATE = """
     <h1>📝 New Trade</h1>
     
     <form method="POST">
+        <div class="form-group">
+            <label>Trade Type *</label>
+            <select name="trade_type" id="trade_type" onchange="toggleOptionsFields()" required>
+                <option value="stock">Stock</option>
+                <option value="option">Option</option>
+            </select>
+        </div>
+        
         <div class="grid">
             <div>
                 <div class="form-group">
@@ -492,12 +515,14 @@ NEW_TRADE_TEMPLATE = """
                     <input type="text" name="entry_time" placeholder="6:57 AM PST">
                 </div>
                 <div class="form-group">
-                    <label>Actual Entry Price *</label>
+                    <label id="entry_price_label">Actual Entry Price *</label>
                     <input type="number" step="0.01" name="entry_price" required>
+                    <small style="color: #888;" id="entry_price_hint">Stock price or option premium per contract</small>
                 </div>
                 <div class="form-group">
-                    <label>Number of Shares * (fractional OK)</label>
+                    <label id="shares_label">Number of Shares * (fractional OK)</label>
                     <input type="number" step="0.01" name="shares" required>
+                    <small style="color: #888;" id="shares_hint">For options: number of contracts</small>
                 </div>
                 <div class="form-group">
                     <label>Scanner Buy Point</label>
@@ -554,6 +579,63 @@ NEW_TRADE_TEMPLATE = """
             </div>
         </div>
         
+        <!-- Options-specific fields -->
+        <div id="options_fields" style="display: none; margin-top: 20px; padding: 20px; background: #16213e; border-radius: 8px;">
+            <h3 style="color: #00d4ff; margin-top: 0;">📊 Options Details</h3>
+            <div class="grid">
+                <div>
+                    <div class="form-group">
+                        <label>Strategy</label>
+                        <select name="option_strategy">
+                            <option value="">Select...</option>
+                            <option value="long_call">Long Call</option>
+                            <option value="cash_secured_put">Cash-Secured Put</option>
+                            <option value="pmcc">Poor Man's Covered Call</option>
+                            <option value="iron_condor">Iron Condor</option>
+                            <option value="bull_call_spread">Bull Call Spread</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Expiration Date</label>
+                        <input type="date" name="option_expiration">
+                    </div>
+                    <div class="form-group">
+                        <label>Strike Price</label>
+                        <input type="number" step="0.01" name="option_strike">
+                        <small style="color: #888;">Primary strike (or short strike for spreads)</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Strike Price 2 (for spreads)</label>
+                        <input type="number" step="0.01" name="option_strike_2">
+                        <small style="color: #888;">Long strike for spreads (optional)</small>
+                    </div>
+                </div>
+                <div>
+                    <div class="form-group">
+                        <label>Option Type</label>
+                        <select name="option_type">
+                            <option value="">Select...</option>
+                            <option value="call">Call</option>
+                            <option value="put">Put</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>DTE (Days to Expiration)</label>
+                        <input type="number" name="option_dte">
+                    </div>
+                    <div class="form-group">
+                        <label>IV at Entry (%)</label>
+                        <input type="number" step="0.1" name="option_iv">
+                    </div>
+                    <div class="form-group">
+                        <label>Delta at Entry</label>
+                        <input type="number" step="0.01" name="option_delta">
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <div class="form-group">
             <label>Notes</label>
             <textarea name="notes" rows="3"></textarea>
@@ -564,6 +646,29 @@ NEW_TRADE_TEMPLATE = """
     </form>
     
     <script>
+    function toggleOptionsFields() {
+        const tradeType = document.getElementById('trade_type').value;
+        const optionsFields = document.getElementById('options_fields');
+        const entryPriceLabel = document.getElementById('entry_price_label');
+        const entryPriceHint = document.getElementById('entry_price_hint');
+        const sharesLabel = document.getElementById('shares_label');
+        const sharesHint = document.getElementById('shares_hint');
+        
+        if (tradeType === 'option') {
+            optionsFields.style.display = 'block';
+            entryPriceLabel.textContent = 'Entry Premium (per contract) *';
+            entryPriceHint.textContent = 'Premium paid/received per contract';
+            sharesLabel.textContent = 'Number of Contracts *';
+            sharesHint.textContent = 'Each contract = 100 shares';
+        } else {
+            optionsFields.style.display = 'none';
+            entryPriceLabel.textContent = 'Actual Entry Price *';
+            entryPriceHint.textContent = 'Stock price or option premium per contract';
+            sharesLabel.textContent = 'Number of Shares * (fractional OK)';
+            sharesHint.textContent = 'For options: number of contracts';
+        }
+    }
+    
     function fetchIndicators() {
         const symbol = document.querySelector('input[name="symbol"]').value;
         const date = document.querySelector('input[name="entry_date"]').value;

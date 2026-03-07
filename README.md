@@ -36,6 +36,11 @@ A Flask-based stock pattern scanner that detects bullish patterns (Cup & Handle,
 - Dark theme with interactive controls
 - Stock search and detailed analysis pages
 - Chart toggles for SMAs and CTO lines
+- **Trade Journal**: Track both stock and options trades with P&L analysis
+  - Stock trades: Entry/exit tracking with position sizing
+  - Options trades: Strategy, strikes, expiration, IV, delta tracking
+  - Auto-fetch historical indicators (ADX, RSI, volume)
+  - Performance analytics and win rate metrics
 
 ### Alpha Research Platform 🆕
 - **Signal Framework**: Standardized signal abstraction with 11+ built-in signals

@@ -22,7 +22,14 @@ A Flask-based stock pattern scanner that detects bullish patterns (Cup & Handle,
 - **Technical Indicators**: RSI, MACD, ADX, Volume analysis
 - **DCF Valuation**: Intrinsic value estimates with margin of safety
 - **Breakout Criteria**: 8-point checklist for entry signals
-- **Options Strategies**: Bull Call Spread recommendations with P&L analysis
+- **IV-Aware Options Strategies**: Dynamic strategy selection based on IV rank, VIX, and market regime
+  - Long Call (low IV environments)
+  - Cash-Secured Put (elevated IV)
+  - Poor Man's Covered Call (moderate IV)
+  - Iron Condor (range-bound markets)
+  - Regime detection using ADX and CTO Larsson lines
+  - Bearish trend warnings to prevent counter-trend trades
+- **Expected Move Analysis**: IV-based expected moves (1-week, 1-month, 45-day) with delta-to-probability translation and pattern target comparison
 - **External Links**: Quick access to Yahoo Finance, Seeking Alpha, and SEC EDGAR filings
 
 ### UI

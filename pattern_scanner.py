@@ -228,7 +228,7 @@ def format_market_cap(value):
 
 
 # ════════════════════════════════════════════════════════════════
-# OPTIONS STRATEGY: BULL CALL SPREAD
+# OPTIONS STRATEGY: IV-AWARE STRATEGY SELECTOR
 # ════════════════════════════════════════════════════════════════
 
 def calculate_approx_delta(strike, current_price, days_to_exp, is_call=True):
@@ -239,324 +239,723 @@ def calculate_approx_delta(strike, current_price, days_to_exp, is_call=True):
     if days_to_exp <= 0:
         days_to_exp = 1
 
-    # Moneyness ratio
     moneyness = current_price / strike if is_call else strike / current_price
-
-    # Time factor (more time = delta closer to 0.5 for ATM)
     time_factor = min(1.0, days_to_exp / 90)
 
-    # Simplified delta approximation
     if is_call:
-        if moneyness >= 1.0:  # ITM
-            base_delta = 0.5 + (moneyness - 1.0) * 2  # Increase toward 1.0
+        if moneyness >= 1.0:
+            base_delta = 0.5 + (moneyness - 1.0) * 2
             delta = min(0.95, base_delta)
-        else:  # OTM
-            base_delta = 0.5 * moneyness  # Decrease toward 0
+        else:
+            base_delta = 0.5 * moneyness
             delta = max(0.05, base_delta)
     else:
-        delta = -1 * \
-            calculate_approx_delta(strike, current_price,
-                                   days_to_exp, is_call=True) + 1
+        delta = -1 * calculate_approx_delta(strike, current_price, days_to_exp, is_call=True) + 1
 
     return round(delta, 2)
 
 
-def suggest_bull_call_spread(symbol, current_price, analysis=None, budget=375):
-    """
-    Suggest a bull call spread for bullish patterns.
-
-    Strategy: Buy ATM/slightly ITM call, sell OTM call 5-10% higher.
-    Expiration: 45-90 days out.
-    Budget: $150-500 (default midpoint $375)
-
-    Returns dict with trade details or error info.
-    """
+def calculate_iv_rank(symbol):
+    """Calculate IV rank (0-100) using 52-week IV range."""
     try:
         ticker = yf.Ticker(symbol)
+        expirations = ticker.options
+        if not expirations:
+            return 50
+        
+        ivs = []
+        for exp in expirations[:12]:  # Sample first 12 expirations
+            try:
+                chain = ticker.option_chain(exp)
+                calls_iv = chain.calls['impliedVolatility'].dropna()
+                if len(calls_iv) > 0:
+                    ivs.append(calls_iv.median())
+            except:
+                continue
+        
+        if len(ivs) < 3:
+            return 50
+        
+        current_iv = ivs[0] if ivs else 0.3
+        iv_low = min(ivs)
+        iv_high = max(ivs)
+        
+        if iv_high == iv_low:
+            return 50
+        
+        iv_rank = ((current_iv - iv_low) / (iv_high - iv_low)) * 100
+        return round(max(0, min(100, iv_rank)), 1)
+    except:
+        return 50
 
-        # Get available expirations
+
+def get_vix():
+    """Fetch current VIX level."""
+    try:
+        vix = yf.Ticker("^VIX")
+        hist = vix.history(period="1d")
+        if not hist.empty:
+            return round(hist['Close'].iloc[-1], 2)
+    except:
+        pass
+    return 20
+
+
+def classify_regime(df, adx_value, cto_bullish):
+    """Classify market regime using ADX and CTO Larsson."""
+    if adx_value is None:
+        return 'UNKNOWN', 'Insufficient data'
+    
+    if adx_value > 25:
+        if cto_bullish:
+            return 'TRENDING_BULLISH', f'Strong bullish trend (ADX {adx_value:.1f})'
+        else:
+            return 'TRENDING_BEARISH', f'Strong bearish trend (ADX {adx_value:.1f})'
+    elif adx_value < 20:
+        return 'RANGE_BOUND', f'Range-bound market (ADX {adx_value:.1f})'
+    else:
+        return 'TRANSITIONING', f'Transitioning regime (ADX {adx_value:.1f})'
+
+
+def suggest_bull_call_spread(symbol, current_price, analysis=None, budget=375, df=None):
+    """IV-aware options strategy selector with regime detection."""
+    try:
+        ticker = yf.Ticker(symbol)
         try:
             expirations = ticker.options
-        except Exception as e:
-            return {'status': 'error', 'message': f'No options available for {symbol}: {e}'}
-
+        except:
+            return {'status': 'no_options', 'message': f'Options data unavailable for {symbol} — consider equity position sizing instead.'}
+        
         if not expirations:
-            return {'status': 'no_options', 'message': f'No options chains available for {symbol}'}
+            return {'status': 'no_options', 'message': f'Options data unavailable for {symbol} — consider equity position sizing instead.'}
+        
+        # Get IV rank and VIX
+        iv_rank = calculate_iv_rank(symbol)
+        vix = get_vix()
+        
+        # Regime detection using existing data
+        regime_type = 'UNKNOWN'
+        regime_desc = 'Unknown'
+        adx_value = None
+        cto_bullish = None
+        
+        if df is not None and len(df) >= 60:
+            # Get ADX from analysis if available, otherwise compute
+            if analysis and 'adx' in analysis:
+                adx_value = analysis['adx']
+            else:
+                adx_data = ta.adx(df['High'], df['Low'], df['Close'], length=14)
+                if adx_data is not None and 'ADX_14' in adx_data.columns:
+                    adx_value = adx_data['ADX_14'].iloc[-1]
+            
+            # Get CTO Larsson bullish/bearish status
+            hl2 = (df['High'] + df['Low']) / 2
+            cto1 = ta.ema(hl2, length=15)
+            cto2 = ta.ema(hl2, length=29)
+            if cto1 is not None and cto2 is not None:
+                cto_bullish = cto1.iloc[-1] >= cto2.iloc[-1]
+            
+            regime_type, regime_desc = classify_regime(df, adx_value, cto_bullish)
+        
+        # Apply regime override rules
+        if regime_type == 'TRENDING_BEARISH':
+            return {
+                'status': 'regime_override',
+                'symbol': symbol,
+                'current_price': round(current_price, 2),
+                'iv_rank': iv_rank,
+                'vix': vix,
+                'regime': 'IV Analysis',
+                'trend_regime': regime_type,
+                'trend_regime_desc': regime_desc,
+                'message': f'⚠️ Bearish regime detected (ADX {adx_value:.1f}, CTO bearish). Pattern signal conflicts with trend. Options play not recommended — review chart before trading.',
+            }
+        
+        # Determine IV-based strategy
+        if iv_rank < 35 and vix < 20:
+            iv_regime = 'Low IV'
+            
+            # Range-bound override for long calls
+            if regime_type == 'RANGE_BOUND':
+                return _build_iron_condor(ticker, symbol, current_price, budget, iv_rank, vix, iv_regime, regime_type, regime_desc, analysis)
+            
+            return _build_long_call(ticker, symbol, current_price, budget, iv_rank, vix, iv_regime, regime_type, regime_desc, analysis)
+        elif iv_rank >= 65:
+            iv_regime = 'Elevated IV'
+            return _build_cash_secured_put(ticker, symbol, current_price, budget, iv_rank, vix, iv_regime, regime_type, regime_desc, analysis)
+        else:
+            iv_regime = 'Moderate IV'
+            return _build_pmcc(ticker, symbol, current_price, budget, iv_rank, vix, iv_regime, regime_type, regime_desc, analysis)
+    
+    except Exception as e:
+        import traceback
+        return {'status': 'error', 'message': f'Error: {str(e)}', 'traceback': traceback.format_exc()}
 
-        # Filter for 45-90 days out
+
+def _build_iron_condor(ticker, symbol, current_price, budget, iv_rank, vix, regime, trend_regime, trend_regime_desc, analysis):
+    """Build Iron Condor for range-bound markets."""
+    rationale = 'Range-bound regime detected. Credit spread or iron condor more appropriate than directional long call in this environment.'
+    today = datetime.today()
+    expirations = ticker.options
+    
+    # Find 7-14 DTE
+    target_exps = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, '%Y-%m-%d')
+            days = (exp_date - today).days
+            if 7 <= days <= 14:
+                target_exps.append({'date': exp, 'days': days})
+        except:
+            continue
+    
+    if not target_exps:
+        return {'status': 'error', 'message': 'No suitable short-term expirations for iron condor'}
+    
+    target_exp = min(target_exps, key=lambda x: abs(x['days'] - 10))
+    exp_date_str = target_exp['date']
+    days_to_exp = target_exp['days']
+    
+    calls = ticker.option_chain(exp_date_str).calls
+    puts = ticker.option_chain(exp_date_str).puts
+    
+    if calls.empty or puts.empty:
+        return {'status': 'error', 'message': 'Empty options chain'}
+    
+    # Calculate 1 SD using ATM IV
+    calls_copy = calls.copy()
+    atm_call = calls_copy.iloc[(calls_copy['strike'] - current_price).abs().argsort()[:1]]
+    iv = float(atm_call['impliedVolatility'].iloc[0]) if pd.notna(atm_call['impliedVolatility'].iloc[0]) else 0.3
+    
+    import math
+    sd = current_price * iv * math.sqrt(days_to_exp/365)
+    
+    # Short strikes at 1 SD
+    short_call_strike_target = current_price + sd
+    short_put_strike_target = current_price - sd
+    
+    # Find short call
+    short_call = calls.iloc[(calls['strike'] - short_call_strike_target).abs().argsort()[:1]].iloc[0]
+    short_call_strike = float(short_call['strike'])
+    short_call_bid = float(short_call['bid']) if pd.notna(short_call['bid']) and short_call['bid'] > 0 else float(short_call['lastPrice']) * 0.95
+    short_call_premium = short_call_bid
+    
+    # Find long call (5 points higher)
+    long_call_strike_target = short_call_strike + 5
+    long_call = calls.iloc[(calls['strike'] - long_call_strike_target).abs().argsort()[:1]].iloc[0]
+    long_call_strike = float(long_call['strike'])
+    long_call_ask = float(long_call['ask']) if pd.notna(long_call['ask']) and long_call['ask'] > 0 else float(long_call['lastPrice'])
+    long_call_premium = long_call_ask
+    
+    # Find short put
+    short_put = puts.iloc[(puts['strike'] - short_put_strike_target).abs().argsort()[:1]].iloc[0]
+    short_put_strike = float(short_put['strike'])
+    short_put_bid = float(short_put['bid']) if pd.notna(short_put['bid']) and short_put['bid'] > 0 else float(short_put['lastPrice']) * 0.95
+    short_put_premium = short_put_bid
+    
+    # Find long put (5 points lower)
+    long_put_strike_target = short_put_strike - 5
+    long_put = puts.iloc[(puts['strike'] - long_put_strike_target).abs().argsort()[:1]].iloc[0]
+    long_put_strike = float(long_put['strike'])
+    long_put_ask = float(long_put['ask']) if pd.notna(long_put['ask']) and long_put['ask'] > 0 else float(long_put['lastPrice'])
+    long_put_premium = long_put_ask
+    
+    # Net credit
+    net_credit = (short_call_premium + short_put_premium - long_call_premium - long_put_premium)
+    credit_per_contract = net_credit * 100
+    
+    # Max risk is width of widest spread minus credit
+    call_spread_width = long_call_strike - short_call_strike
+    put_spread_width = short_put_strike - long_put_strike
+    max_width = max(call_spread_width, put_spread_width)
+    max_risk = (max_width - net_credit) * 100
+    
+    contracts = max(1, int(budget / max_risk)) if max_risk > 0 else 1
+    total_credit = credit_per_contract * contracts
+    total_risk = max_risk * contracts
+    
+    return {
+        'status': 'success',
+        'symbol': symbol,
+        'current_price': round(current_price, 2),
+        'strategy': 'Iron Condor',
+        'iv_rank': iv_rank,
+        'vix': vix,
+        'regime': regime,
+        'trend_regime': trend_regime,
+        'trend_regime_desc': trend_regime_desc,
+        'rationale': rationale,
+        'expiration': exp_date_str,
+        'days_to_exp': days_to_exp,
+        'short_call_strike': short_call_strike,
+        'long_call_strike': long_call_strike,
+        'short_put_strike': short_put_strike,
+        'long_put_strike': long_put_strike,
+        'net_credit': round(net_credit, 2),
+        'credit_per_contract': round(credit_per_contract, 2),
+        'contracts': contracts,
+        'total_credit': round(total_credit, 2),
+        'max_risk': round(total_risk, 2),
+        'budget': budget,
+        'signal_score': analysis.get('signal_score', 50) if analysis else 50,
+    }
+
+
+def _build_long_call(ticker, symbol, current_price, budget, iv_rank, vix, regime, trend_regime, trend_regime_desc, analysis):
+    """Build Long Call strategy."""
+    rationale = 'Low IV environment — buy premium, don\'t sell it. Spread caps upside on a breakout setup.'
+    today = datetime.today()
+    expirations = ticker.options
+    
+    # Find 45 DTE expiration
+    target_exps = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, '%Y-%m-%d')
+            days = (exp_date - today).days
+            if days >= 40:
+                target_exps.append({'date': exp, 'days': days})
+        except:
+            continue
+    
+    if not target_exps:
+        return {'status': 'error', 'message': 'No suitable expirations found'}
+    
+    target_exp = min(target_exps, key=lambda x: abs(x['days'] - 45))
+    exp_date_str = target_exp['date']
+    days_to_exp = target_exp['days']
+    
+    chain = ticker.option_chain(exp_date_str).calls
+    if chain.empty:
+        return {'status': 'error', 'message': 'Empty options chain'}
+    
+    # Get ATM IV for SD calculation
+    chain = chain.copy()
+    atm_option = chain.iloc[(chain['strike'] - current_price).abs().argsort()[:1]]
+    iv = float(atm_option['impliedVolatility'].iloc[0]) if pd.notna(atm_option['impliedVolatility'].iloc[0]) else 0.3
+    
+    # Calculate 1 SD strike
+    import math
+    sd = current_price * iv * math.sqrt(45/365)
+    target_strike = current_price + sd
+    
+    # Find closest strike
+    option = chain.iloc[(chain['strike'] - target_strike).abs().argsort()[:1]].iloc[0]
+    strike = float(option['strike'])
+    ask = float(option['ask']) if pd.notna(option['ask']) and option['ask'] > 0 else float(option['lastPrice'])
+    bid = float(option['bid']) if pd.notna(option['bid']) else ask * 0.95
+    mid = (ask + bid) / 2
+    delta = calculate_approx_delta(strike, current_price, days_to_exp)
+    volume = int(option['volume']) if pd.notna(option['volume']) else 0
+    oi = int(option['openInterest']) if pd.notna(option['openInterest']) else 0
+    
+    contracts = max(1, int(budget / (mid * 100)))
+    total_cost = mid * 100 * contracts
+    
+    return {
+        'status': 'success',
+        'symbol': symbol,
+        'current_price': round(current_price, 2),
+        'strategy': 'Long Call',
+        'iv_rank': iv_rank,
+        'vix': vix,
+        'regime': regime,
+        'trend_regime': trend_regime,
+        'trend_regime_desc': trend_regime_desc,
+        'rationale': rationale,
+        'expiration': exp_date_str,
+        'days_to_exp': days_to_exp,
+        'buy_strike': strike,
+        'buy_premium': round(mid, 2),
+        'buy_delta': delta,
+        'buy_iv': round(iv * 100, 1),
+        'buy_volume': volume,
+        'buy_oi': oi,
+        'contracts': contracts,
+        'total_cost': round(total_cost, 2),
+        'max_loss_total': round(total_cost, 2),
+        'max_gain_total': 'Unlimited',
+        'budget': budget,
+        'signal_score': analysis.get('signal_score', 50) if analysis else 50,
+    }
+
+
+def _build_cash_secured_put(ticker, symbol, current_price, budget, iv_rank, vix, regime, trend_regime, trend_regime_desc, analysis):
+    """Build Cash-Secured Put strategy."""
+    rationale = 'Elevated IV — sell rich premium. Get paid to wait for pullback to your entry price.'
+    today = datetime.today()
+    expirations = ticker.options
+    
+    # Find 30-45 DTE
+    target_exps = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, '%Y-%m-%d')
+            days = (exp_date - today).days
+            if 30 <= days <= 45:
+                target_exps.append({'date': exp, 'days': days})
+        except:
+            continue
+    
+    if not target_exps:
+        return {'status': 'error', 'message': 'No suitable expirations'}
+    
+    target_exp = min(target_exps, key=lambda x: abs(x['days'] - 37))
+    exp_date_str = target_exp['date']
+    days_to_exp = target_exp['days']
+    
+    chain = ticker.option_chain(exp_date_str).puts
+    if chain.empty:
+        return {'status': 'error', 'message': 'Empty puts chain'}
+    
+    # Find ATM put
+    chain = chain.copy()
+    option = chain.iloc[(chain['strike'] - current_price).abs().argsort()[:1]].iloc[0]
+    strike = float(option['strike'])
+    bid = float(option['bid']) if pd.notna(option['bid']) and option['bid'] > 0 else float(option['lastPrice']) * 0.95
+    ask = float(option['ask']) if pd.notna(option['ask']) else bid * 1.05
+    mid = (ask + bid) / 2
+    delta = calculate_approx_delta(strike, current_price, days_to_exp, is_call=False)
+    iv = float(option['impliedVolatility']) if pd.notna(option['impliedVolatility']) else None
+    volume = int(option['volume']) if pd.notna(option['volume']) else 0
+    oi = int(option['openInterest']) if pd.notna(option['openInterest']) else 0
+    
+    premium_collected = mid * 100
+    effective_entry = strike - mid
+    breakeven = strike - mid
+    
+    return {
+        'status': 'success',
+        'symbol': symbol,
+        'current_price': round(current_price, 2),
+        'strategy': 'Cash-Secured Put',
+        'iv_rank': iv_rank,
+        'vix': vix,
+        'regime': regime,
+        'trend_regime': trend_regime,
+        'trend_regime_desc': trend_regime_desc,
+        'rationale': rationale,
+        'expiration': exp_date_str,
+        'days_to_exp': days_to_exp,
+        'sell_strike': strike,
+        'sell_premium': round(mid, 2),
+        'sell_delta': delta,
+        'sell_iv': round(iv * 100, 1) if iv else None,
+        'sell_volume': volume,
+        'sell_oi': oi,
+        'premium_collected': round(premium_collected, 2),
+        'effective_entry': round(effective_entry, 2),
+        'breakeven': round(breakeven, 2),
+        'max_gain_total': round(premium_collected, 2),
+        'max_loss_total': round((strike * 100) - premium_collected, 2),
+        'budget': budget,
+        'signal_score': analysis.get('signal_score', 50) if analysis else 50,
+    }
+
+
+def _build_pmcc(ticker, symbol, current_price, budget, iv_rank, vix, regime, trend_regime, trend_regime_desc, analysis):
+    """Build Poor Man's Covered Call (diagonal spread)."""
+    rationale = 'Moderate IV — diagonal gives long delta exposure with reduced capital vs. shares, and short leg offsets cost.'
+    today = datetime.today()
+    expirations = ticker.options
+    
+    # Find long leg: 90+ DTE
+    long_exps = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, '%Y-%m-%d')
+            days = (exp_date - today).days
+            if days >= 90:
+                long_exps.append({'date': exp, 'days': days})
+        except:
+            continue
+    
+    if not long_exps:
+        return {'status': 'error', 'message': 'No long-dated expirations'}
+    
+    long_exp = min(long_exps, key=lambda x: abs(x['days'] - 120))
+    long_exp_str = long_exp['date']
+    long_days = long_exp['days']
+    
+    # Find short leg: 30-45 DTE
+    short_exps = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, '%Y-%m-%d')
+            days = (exp_date - today).days
+            if 30 <= days <= 45:
+                short_exps.append({'date': exp, 'days': days})
+        except:
+            continue
+    
+    if not short_exps:
+        return {'status': 'error', 'message': 'No short-dated expirations'}
+    
+    short_exp = min(short_exps, key=lambda x: abs(x['days'] - 37))
+    short_exp_str = short_exp['date']
+    short_days = short_exp['days']
+    
+    # Long leg: Deep ITM (0.80+ delta)
+    long_chain = ticker.option_chain(long_exp_str).calls
+    if long_chain.empty:
+        return {'status': 'error', 'message': 'Empty long chain'}
+    
+    long_chain = long_chain.copy()
+    long_chain['approx_delta'] = long_chain['strike'].apply(lambda s: calculate_approx_delta(s, current_price, long_days))
+    long_candidates = long_chain[long_chain['approx_delta'] >= 0.75]
+    
+    if long_candidates.empty:
+        long_option = long_chain.iloc[(long_chain['strike'] - current_price * 0.85).abs().argsort()[:1]].iloc[0]
+    else:
+        long_option = long_candidates.iloc[(long_candidates['approx_delta'] - 0.80).abs().argsort()[:1]].iloc[0]
+    
+    long_strike = float(long_option['strike'])
+    long_ask = float(long_option['ask']) if pd.notna(long_option['ask']) and long_option['ask'] > 0 else float(long_option['lastPrice'])
+    long_bid = float(long_option['bid']) if pd.notna(long_option['bid']) else long_ask * 0.95
+    long_mid = (long_ask + long_bid) / 2
+    long_delta = calculate_approx_delta(long_strike, current_price, long_days)
+    long_iv = float(long_option['impliedVolatility']) if pd.notna(long_option['impliedVolatility']) else None
+    long_volume = int(long_option['volume']) if pd.notna(long_option['volume']) else 0
+    long_oi = int(long_option['openInterest']) if pd.notna(long_option['openInterest']) else 0
+    
+    # Short leg: OTM (0.30 delta)
+    short_chain = ticker.option_chain(short_exp_str).calls
+    if short_chain.empty:
+        return {'status': 'error', 'message': 'Empty short chain'}
+    
+    short_chain = short_chain.copy()
+    short_chain['approx_delta'] = short_chain['strike'].apply(lambda s: calculate_approx_delta(s, current_price, short_days))
+    short_candidates = short_chain[(short_chain['approx_delta'] >= 0.25) & (short_chain['approx_delta'] <= 0.35)]
+    
+    if short_candidates.empty:
+        short_option = short_chain.iloc[(short_chain['strike'] - current_price * 1.05).abs().argsort()[:1]].iloc[0]
+    else:
+        short_option = short_candidates.iloc[(short_candidates['approx_delta'] - 0.30).abs().argsort()[:1]].iloc[0]
+    
+    short_strike = float(short_option['strike'])
+    short_bid = float(short_option['bid']) if pd.notna(short_option['bid']) and short_option['bid'] > 0 else float(short_option['lastPrice']) * 0.95
+    short_ask = float(short_option['ask']) if pd.notna(short_option['ask']) else short_bid * 1.05
+    short_mid = (short_ask + short_bid) / 2
+    short_delta = calculate_approx_delta(short_strike, current_price, short_days)
+    short_iv = float(short_option['impliedVolatility']) if pd.notna(short_option['impliedVolatility']) else None
+    short_volume = int(short_option['volume']) if pd.notna(short_option['volume']) else 0
+    short_oi = int(short_option['openInterest']) if pd.notna(short_option['openInterest']) else 0
+    
+    net_debit = long_mid - short_mid
+    contracts = max(1, int(budget / (net_debit * 100)))
+    total_cost = net_debit * 100 * contracts
+    max_profit = (short_strike - long_strike - net_debit) * 100 * contracts
+    
+    return {
+        'status': 'success',
+        'symbol': symbol,
+        'current_price': round(current_price, 2),
+        'strategy': 'Poor Man\'s Covered Call',
+        'iv_rank': iv_rank,
+        'vix': vix,
+        'regime': regime,
+        'trend_regime': trend_regime,
+        'trend_regime_desc': trend_regime_desc,
+        'rationale': rationale,
+        'long_expiration': long_exp_str,
+        'long_days_to_exp': long_days,
+        'short_expiration': short_exp_str,
+        'short_days_to_exp': short_days,
+        'buy_strike': long_strike,
+        'buy_premium': round(long_mid, 2),
+        'buy_delta': long_delta,
+        'buy_iv': round(long_iv * 100, 1) if long_iv else None,
+        'buy_volume': long_volume,
+        'buy_oi': long_oi,
+        'sell_strike': short_strike,
+        'sell_premium': round(short_mid, 2),
+        'sell_delta': short_delta,
+        'sell_iv': round(short_iv * 100, 1) if short_iv else None,
+        'sell_volume': short_volume,
+        'sell_oi': short_oi,
+        'net_debit': round(net_debit, 2),
+        'contracts': contracts,
+        'total_cost': round(total_cost, 2),
+        'max_gain_total': round(max_profit, 2) if max_profit > 0 else 'Variable',
+        'max_loss_total': round(total_cost, 2),
+        'budget': budget,
+        'signal_score': analysis.get('signal_score', 50) if analysis else 50,
+    }
+    """Build Long Call strategy."""
+    today = datetime.today()
+    expirations = ticker.options
+    
+    # Find 45 DTE expiration
+    target_exps = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, '%Y-%m-%d')
+            days = (exp_date - today).days
+            if days >= 40:
+                target_exps.append({'date': exp, 'days': days})
+        except:
+            continue
+    
+    if not target_exps:
+        return {'status': 'error', 'message': 'No suitable expirations found'}
+    
+    target_exp = min(target_exps, key=lambda x: abs(x['days'] - 45))
+    exp_date_str = target_exp['date']
+    days_to_exp = target_exp['days']
+    
+    chain = ticker.option_chain(exp_date_str).calls
+    if chain.empty:
+        return {'status': 'error', 'message': 'Empty options chain'}
+    
+    # Get ATM IV for SD calculation
+    chain = chain.copy()
+    atm_option = chain.iloc[(chain['strike'] - current_price).abs().argsort()[:1]]
+    iv = float(atm_option['impliedVolatility'].iloc[0]) if pd.notna(atm_option['impliedVolatility'].iloc[0]) else 0.3
+    
+    # Calculate 1 SD strike
+    import math
+    sd = current_price * iv * math.sqrt(45/365)
+    target_strike = current_price + sd
+    
+    # Find closest strike
+    option = chain.iloc[(chain['strike'] - target_strike).abs().argsort()[:1]].iloc[0]
+    strike = float(option['strike'])
+    ask = float(option['ask']) if pd.notna(option['ask']) and option['ask'] > 0 else float(option['lastPrice'])
+    bid = float(option['bid']) if pd.notna(option['bid']) else ask * 0.95
+    mid = (ask + bid) / 2
+    delta = calculate_approx_delta(strike, current_price, days_to_exp)
+    volume = int(option['volume']) if pd.notna(option['volume']) else 0
+    oi = int(option['openInterest']) if pd.notna(option['openInterest']) else 0
+    
+    contracts = max(1, int(budget / (mid * 100)))
+    total_cost = mid * 100 * contracts
+    
+    return {
+        'status': 'success',
+        'symbol': symbol,
+        'current_price': round(current_price, 2),
+        'strategy': 'Long Call',
+        'iv_rank': iv_rank,
+        'vix': vix,
+        'regime': regime,
+        'rationale': rationale,
+        'expiration': exp_date_str,
+        'days_to_exp': days_to_exp,
+        'buy_strike': strike,
+        'buy_premium': round(mid, 2),
+        'buy_delta': delta,
+        'buy_iv': round(iv * 100, 1),
+        'buy_volume': volume,
+        'buy_oi': oi,
+        'contracts': contracts,
+        'total_cost': round(total_cost, 2),
+        'max_loss_total': round(total_cost, 2),
+        'max_gain_total': 'Unlimited',
+        'budget': budget,
+        'signal_score': analysis.get('signal_score', 50) if analysis else 50,
+    }
+
+
+def calculate_expected_move(symbol, current_price, pattern_target=None):
+    """Calculate expected move analysis using IV from options chain."""
+    try:
+        ticker = yf.Ticker(symbol)
+        expirations = ticker.options
+        if not expirations:
+            return {'status': 'no_data'}
+        
+        # Get ATM IV from nearest expiration >= 30 days
         today = datetime.today()
-        target_exps = []
-
+        target_exp = None
         for exp in expirations:
             try:
                 exp_date = datetime.strptime(exp, '%Y-%m-%d')
-                days_to_exp = (exp_date - today).days
-                if 45 <= days_to_exp <= 90:
-                    target_exps.append({'date': exp, 'days': days_to_exp})
+                days = (exp_date - today).days
+                if days >= 30:
+                    target_exp = {'date': exp, 'days': days}
+                    break
             except:
                 continue
-
-        if not target_exps:
-            # Try to find closest to 60 days even outside range
-            all_exps = []
-            for exp in expirations:
-                try:
-                    exp_date = datetime.strptime(exp, '%Y-%m-%d')
-                    days_to_exp = (exp_date - today).days
-                    if days_to_exp > 14:  # At least 2 weeks out
-                        all_exps.append({'date': exp, 'days': days_to_exp})
-                except:
-                    continue
-
-            if not all_exps:
-                return {'status': 'no_suitable_exp', 'message': 'No suitable expirations found (need 14+ days)'}
-
-            # Pick closest to 60 days
-            target_exps = [min(all_exps, key=lambda x: abs(x['days'] - 60))]
-
-        # Pick the expiration closest to 60 days
-        target_exp = min(target_exps, key=lambda x: abs(x['days'] - 60))
-        exp_date_str = target_exp['date']
-        days_to_exp = target_exp['days']
-
-        # Get call chain
-        try:
-            chain = ticker.option_chain(exp_date_str).calls
-        except Exception as e:
-            return {'status': 'error', 'message': f'Error fetching options chain: {e}'}
-
+        
+        if not target_exp:
+            return {'status': 'no_data'}
+        
+        chain = ticker.option_chain(target_exp['date']).calls
         if chain.empty:
-            return {'status': 'empty_chain', 'message': 'Options chain is empty'}
-
-        # Calculate approximate deltas for each strike
-        chain = chain.copy()
-        chain['approx_delta'] = chain['strike'].apply(
-            lambda s: calculate_approx_delta(s, current_price, days_to_exp)
-        )
-
-        # Find BUY strike: ATM or slightly ITM (delta 0.55-0.70)
-        # Look for strikes between 98% and 102% of current price
-        buy_candidates = chain[
-            (chain['strike'] >= current_price * 0.95) &
-            (chain['strike'] <= current_price * 1.03) &
-            (chain['volume'].fillna(0) > 0) | (
-                chain['openInterest'].fillna(0) > 50)
-        ].copy()
-
-        if buy_candidates.empty:
-            # Fallback: just get closest to ATM
-            chain['distance_atm'] = abs(chain['strike'] - current_price)
-            buy_candidates = chain.nsmallest(3, 'distance_atm')
-
-        if buy_candidates.empty:
-            return {'status': 'no_buy_strikes', 'message': 'No suitable buy strikes found'}
-
-        # Pick the strike closest to ATM with decent liquidity
-        buy_candidates['liquidity_score'] = (
-            buy_candidates['volume'].fillna(0) +
-            buy_candidates['openInterest'].fillna(0) * 0.1
-        )
-        buy_candidates = buy_candidates.sort_values(
-            'liquidity_score', ascending=False)
-
-        # Get the best buy option (closest to ATM with liquidity)
-        buy_option = buy_candidates.iloc[0]
-        buy_strike = float(buy_option['strike'])
-        buy_ask = float(buy_option['ask']) if pd.notna(
-            buy_option['ask']) and buy_option['ask'] > 0 else float(buy_option['lastPrice'])
-        buy_bid = float(buy_option['bid']) if pd.notna(
-            buy_option['bid']) else buy_ask * 0.95
-        buy_mid = (buy_ask + buy_bid) / 2
-        buy_delta = float(buy_option['approx_delta'])
-        buy_iv = float(buy_option['impliedVolatility']) if pd.notna(
-            buy_option.get('impliedVolatility')) else None
-        buy_volume = int(buy_option['volume']) if pd.notna(
-            buy_option['volume']) else 0
-        buy_oi = int(buy_option['openInterest']) if pd.notna(
-            buy_option['openInterest']) else 0
-
-        # Find SELL strike: 5-10% OTM (delta 0.25-0.40)
-        sell_target_low = buy_strike * 1.05
-        sell_target_high = buy_strike * 1.12
-
-        sell_candidates = chain[
-            (chain['strike'] >= sell_target_low) &
-            (chain['strike'] <= sell_target_high) &
-            ((chain['volume'].fillna(0) > 0) |
-             (chain['openInterest'].fillna(0) > 20))
-        ].copy()
-
-        if sell_candidates.empty:
-            # Fallback: get first available strike above buy strike
-            sell_candidates = chain[chain['strike'] > buy_strike].head(3)
-
-        if sell_candidates.empty:
-            return {'status': 'no_sell_strikes', 'message': 'No suitable sell strikes found'}
-
-        # Pick strike closest to 7% OTM
-        ideal_sell_strike = buy_strike * 1.07
-        sell_candidates['distance_ideal'] = abs(
-            sell_candidates['strike'] - ideal_sell_strike)
-        sell_option = sell_candidates.nsmallest(1, 'distance_ideal').iloc[0]
-
-        sell_strike = float(sell_option['strike'])
-        sell_bid = float(sell_option['bid']) if pd.notna(
-            sell_option['bid']) and sell_option['bid'] > 0 else float(sell_option['lastPrice']) * 0.95
-        sell_ask = float(sell_option['ask']) if pd.notna(
-            sell_option['ask']) else sell_bid * 1.05
-        sell_mid = (sell_ask + sell_bid) / 2
-        sell_delta = float(sell_option['approx_delta'])
-        sell_iv = float(sell_option['impliedVolatility']) if pd.notna(
-            sell_option.get('impliedVolatility')) else None
-        sell_volume = int(sell_option['volume']) if pd.notna(
-            sell_option['volume']) else 0
-        sell_oi = int(sell_option['openInterest']) if pd.notna(
-            sell_option['openInterest']) else 0
-
-        # Calculate spread metrics
-        # Use mid prices for realistic fill estimate, ask/bid for worst case
-        net_debit_mid = buy_mid - sell_mid
-        net_debit_worst = buy_ask - sell_bid  # Worst case fill
-
-        if net_debit_mid <= 0:
-            return {'status': 'invalid_spread', 'message': 'Spread results in credit (not a debit spread)'}
-
-        spread_width = sell_strike - buy_strike
-
-        # Position sizing
-        cost_per_contract = net_debit_mid * 100
-        max_contracts = int(
-            budget / cost_per_contract) if cost_per_contract > 0 else 0
-        max_contracts = max(1, min(max_contracts, 3))  # Cap at 1-3 contracts
-
-        total_cost = net_debit_mid * 100 * max_contracts
-        total_cost_worst = net_debit_worst * 100 * max_contracts
-
-        # Breakeven and profit targets
-        breakeven = buy_strike + net_debit_mid
-        max_gain_per_contract = (spread_width - net_debit_mid) * 100
-        max_gain_total = max_gain_per_contract * max_contracts
-        max_loss_total = net_debit_mid * 100 * max_contracts
-
-        # Risk/reward ratio
-        rr_ratio = max_gain_total / max_loss_total if max_loss_total > 0 else 0
-
-        # Probability estimate (simplified)
-        # Based on how far breakeven is from current price
-        breakeven_move_needed = (
-            (breakeven - current_price) / current_price) * 100
-
-        # Exit targets
-        profit_target_50 = net_debit_mid * 1.5  # 50% profit
-        profit_target_100 = net_debit_mid * 2.0  # 100% profit
-        stop_loss_value = net_debit_mid * 0.5  # 50% loss
-
-        # Get stop loss from pattern analysis if available
-        pattern_stop = None
-        if analysis and 'stop_loss' in analysis:
-            pattern_stop = analysis['stop_loss']
-
-        # IV assessment
-        iv_assessment = 'Unknown'
-        avg_iv = None
-        if buy_iv and sell_iv:
-            avg_iv = (buy_iv + sell_iv) / 2
-            if avg_iv > 0.6:
-                iv_assessment = 'High IV - Consider wider strikes'
-            elif avg_iv > 0.4:
-                iv_assessment = 'Elevated IV - Spread helps reduce IV exposure'
-            elif avg_iv > 0.2:
-                iv_assessment = 'Moderate IV - Good for spreads'
+            return {'status': 'no_data'}
+        
+        # Get ATM IV
+        atm_option = chain.iloc[(chain['strike'] - current_price).abs().argsort()[:1]]
+        iv = float(atm_option['impliedVolatility'].iloc[0]) if pd.notna(atm_option['impliedVolatility'].iloc[0]) else None
+        
+        if not iv:
+            return {'status': 'no_data'}
+        
+        import math
+        
+        # Expected moves
+        move_1w = current_price * iv * math.sqrt(5/252)
+        move_1m = current_price * iv * math.sqrt(21/252)
+        move_45d = current_price * iv * math.sqrt(45/252)
+        
+        # Delta-based strikes
+        dte = target_exp['days']
+        delta_strikes = []
+        for target_delta in [0.30, 0.20, 0.15, 0.10]:
+            # Find strike closest to this delta
+            chain_copy = chain.copy()
+            chain_copy['approx_delta'] = chain_copy['strike'].apply(
+                lambda s: calculate_approx_delta(s, current_price, dte)
+            )
+            closest = chain_copy.iloc[(chain_copy['approx_delta'] - target_delta).abs().argsort()[:1]]
+            if not closest.empty:
+                strike = float(closest['strike'].iloc[0])
+                actual_delta = float(closest['approx_delta'].iloc[0])
+                prob_otm = (1 - actual_delta) * 100
+                distance_pct = ((strike - current_price) / current_price) * 100
+                delta_strikes.append({
+                    'delta': target_delta,
+                    'strike': round(strike, 2),
+                    'prob_otm': round(prob_otm, 1),
+                    'distance_pct': round(distance_pct, 1)
+                })
+        
+        # Pattern target comparison
+        target_assessment = None
+        if pattern_target:
+            target_pct = ((pattern_target - current_price) / current_price) * 100
+            upper_bound = current_price + move_45d
+            upper_pct = ((upper_bound - current_price) / current_price) * 100
+            
+            if pattern_target <= upper_bound:
+                assessment = 'WITHIN'
+                note = None
             else:
-                iv_assessment = 'Low IV - Consider long calls instead'
-
-        # Signal strength adjustment
-        signal_score = analysis.get('signal_score', 50) if analysis else 50
-        if signal_score >= 75:
-            recommendation_strength = 'STRONG'
-            size_recommendation = f'{max_contracts} contracts (max for budget)'
-        elif signal_score >= 55:
-            recommendation_strength = 'MODERATE'
-            size_recommendation = f'{max(1, max_contracts - 1)} contract(s) (conservative)'
-        else:
-            recommendation_strength = 'SPECULATIVE'
-            size_recommendation = '1 contract only (high risk)'
-
+                assessment = 'EXCEEDS'
+                note = 'Target exceeds expected move — consider longer dated options (60-90 DTE) to give the setup time to play out.'
+            
+            target_assessment = {
+                'target': round(pattern_target, 2),
+                'target_pct': round(target_pct, 1),
+                'upper_bound': round(upper_bound, 2),
+                'upper_pct': round(upper_pct, 1),
+                'assessment': assessment,
+                'note': note
+            }
+        
         return {
             'status': 'success',
-            'symbol': symbol,
-            'current_price': round(current_price, 2),
-            'strategy': 'Bull Call Spread',
-
-            # Expiration
-            'expiration': exp_date_str,
-            'days_to_exp': days_to_exp,
-
-            # Buy leg (long call)
-            'buy_strike': buy_strike,
-            'buy_premium': round(buy_mid, 2),
-            'buy_premium_ask': round(buy_ask, 2),
-            'buy_delta': buy_delta,
-            'buy_iv': round(buy_iv * 100, 1) if buy_iv else None,
-            'buy_volume': buy_volume,
-            'buy_oi': buy_oi,
-
-            # Sell leg (short call)
-            'sell_strike': sell_strike,
-            'sell_premium': round(sell_mid, 2),
-            'sell_premium_bid': round(sell_bid, 2),
-            'sell_delta': sell_delta,
-            'sell_iv': round(sell_iv * 100, 1) if sell_iv else None,
-            'sell_volume': sell_volume,
-            'sell_oi': sell_oi,
-
-            # Spread metrics
-            'spread_width': round(spread_width, 2),
-            'net_debit': round(net_debit_mid, 2),
-            'net_debit_worst': round(net_debit_worst, 2),
-
-            # Position sizing
-            'contracts': max_contracts,
-            'total_cost': round(total_cost, 2),
-            'total_cost_worst': round(total_cost_worst, 2),
-            'budget': budget,
-
-            # Profit/Loss
-            'breakeven': round(breakeven, 2),
-            'breakeven_move_pct': round(breakeven_move_needed, 2),
-            'max_gain_per_contract': round(max_gain_per_contract, 2),
-            'max_gain_total': round(max_gain_total, 2),
-            'max_loss_total': round(max_loss_total, 2),
-            'rr_ratio': round(rr_ratio, 2),
-
-            # Exit rules
-            'profit_target_50': round(profit_target_50, 2),
-            'profit_target_100': round(profit_target_100, 2),
-            'stop_loss_spread': round(stop_loss_value, 2),
-            'pattern_stop': pattern_stop,
-            'exit_days_before_exp': 21,
-
-            # IV analysis
-            'avg_iv': round(avg_iv * 100, 1) if avg_iv else None,
-            'iv_assessment': iv_assessment,
-
-            # Signal integration
-            'signal_score': signal_score,
-            'recommendation_strength': recommendation_strength,
-            'size_recommendation': size_recommendation,
+            'iv': round(iv * 100, 1),
+            'move_1w': round(move_1w, 2),
+            'move_1m': round(move_1m, 2),
+            'move_45d': round(move_45d, 2),
+            'delta_strikes': delta_strikes,
+            'target_assessment': target_assessment,
+            'expiration': target_exp['date'],
+            'dte': dte
         }
-
-    except Exception as e:
-        import traceback
-        return {
-            'status': 'error',
-            'message': f'Error calculating options strategy: {str(e)}',
-            'traceback': traceback.format_exc()
-        }
-
-
-# ════════════════════════════════════════════════════════════════
-    return sentiment
+    except:
+        return {'status': 'no_data'}
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2014,6 +2413,7 @@ def home():
             <a href="/">Home</a>
             <a href="/tracked">Tracked Stocks</a>
             <a href="/research">🔬 Alpha Research</a>
+            <a href="/journal/">📊 Trade Journal</a>
             <a href="/saved-results">📁 Saved Results</a>
         </div>
         <h1>🏆 Stock Pattern Scanner <span class="new-badge">ENHANCED</span></h1>
@@ -2371,7 +2771,10 @@ SCAN_RESULTS_TEMPLATE = """
             {% for r in results %}
             <tr>
                 <td><strong>{{ r.symbol }}</strong></td>
-                <td><a class="view-btn" href="/chart/{{ r.symbol }}">View</a></td>
+                <td>
+                    <a class="view-btn" href="/chart/{{ r.symbol }}">View</a>
+                    <a class="view-btn" href="/journal/new?symbol={{ r.symbol }}&score={{ r.score }}&buy_point={{ r.buy_point }}&stop={{ r.stop_loss }}&target={{ r.target }}&pattern={{ r.pattern_type }}&adx={{ r.adx }}&rsi={{ r.rsi }}" style="background: #4caf50; margin-left: 5px;">Log Trade</a>
+                </td>
                 <td>{{ r.pattern_count }}</td>
                 <td>{% if r.asc_triangle %}<span class="pattern-badge badge-triangle">YES<br>R: ${{ r.asc_triangle.resistance }}</span>{% else %}-{% endif %}</td>
                 <td>{% if r.bull_flag %}<span class="pattern-badge badge-flag">FLAG<br>+{{ r.bull_flag.pole_gain|int }}%</span>{% else %}-{% endif %}</td>
@@ -2837,7 +3240,18 @@ def chart(symbol):
             symbol,
             company_info['current_price'] or df['Close'].iloc[-1],
             analysis,
-            budget=options_budget
+            budget=options_budget,
+            df=df
+        )
+        
+        # Calculate expected move analysis
+        pattern_target = None
+        if cup_pattern and 'target' in cup_pattern:
+            pattern_target = cup_pattern['target']
+        expected_move = calculate_expected_move(
+            symbol,
+            company_info['current_price'] or df['Close'].iloc[-1],
+            pattern_target
         )
 
         # Detect double bottom
@@ -2956,6 +3370,12 @@ def chart(symbol):
                         {{ company.exchange }} | {{ company.sector }} | {{ company.industry }} | 
                         Market Cap: {{ company.market_cap_fmt }}
                     </div>
+                </div>
+                <div>
+                    <a class="btn" href="/journal/new?symbol={{ symbol }}&planned_entry={{ company.current_price }}&pattern={{ 'cup_handle' if cup_pattern else 'mixed' }}&adx={{ analysis.criteria.adx_strong.value if analysis else '' }}&rsi={{ analysis.criteria.rsi_healthy.value if analysis else '' }}&sector={{ company.sector }}" 
+                       style="background: #4caf50; padding: 12px 24px; font-size: 14px;">
+                        📝 Log Trade
+                    </a>
                 </div>
             </div>
             
@@ -3239,12 +3659,32 @@ def chart(symbol):
                     {% endif %}
                 </div>
                 
-                <!-- Options Strategy: Bull Call Spread -->
+                <!-- Options Strategy: IV-Aware Selector -->
                 <div class="card" style="grid-column: span 2;">
-                    <h3>📈 Options Strategy: Bull Call Spread</h3>
+                    <h3>📈 Options Strategy: {{ options.strategy if options.status == 'success' else 'Analysis' }}</h3>
+                    {% if options.status == 'success' or options.status == 'regime_override' %}
+                    <!-- Options Conditions Summary -->
+                    <div style="margin-bottom: 15px; padding: 12px; background: #0a0a1a; border-radius: 8px; border-left: 3px solid #00d4ff;">
+                        <strong style="color: #00d4ff;">Options Conditions:</strong>
+                        <span style="color: #fff;">IV Rank: {{ options.iv_rank }}% | VIX: {{ options.vix }} | Regime: {{ options.regime }}</span><br>
+                        {% if options.trend_regime %}
+                        <strong style="color: #ff9800;">Trend Regime: {{ options.trend_regime }}</strong>
+                        <span style="font-size: 11px; color: #aaa;">({{ options.trend_regime_desc }})</span><br>
+                        {% endif %}
+                        {% if options.status == 'regime_override' %}
+                        <div style="margin-top: 10px; padding: 10px; background: #3d1a1a; border-left: 3px solid #f44336; border-radius: 5px;">
+                            <span style="color: #f44336; font-weight: bold;">{{ options.message }}</span>
+                        </div>
+                        {% else %}
+                        <strong style="color: #00c853;">Strategy Selected: {{ options.strategy }}</strong><br>
+                        <span style="font-size: 12px; color: #aaa;">{{ options.rationale }}</span>
+                        {% endif %}
+                    </div>
+                    
                     {% if options.status == 'success' %}
-                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-                        <!-- Trade Setup -->
+                    {% if options.strategy == 'Long Call' %}
+                    <!-- Long Call Strategy -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                         <div>
                             <h4 style="color: #00d4ff; margin-top: 0;">📋 Trade Setup</h4>
                             <table>
@@ -3260,6 +3700,79 @@ def chart(symbol):
                                         </span>
                                     </td>
                                 </tr>
+                                <tr><th>Contracts</th><td style="font-weight: bold;">{{ options.contracts }}</td></tr>
+                                <tr><th>Total Cost</th><td style="color: #ff9800;">${{ options.total_cost }}</td></tr>
+                            </table>
+                        </div>
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">💰 Risk & Reward</h4>
+                            <table>
+                                <tr><th>Max Loss</th><td style="color: #f44336;">${{ options.max_loss_total }}</td></tr>
+                                <tr><th>Max Gain</th><td style="color: #00c853; font-weight: bold;">{{ options.max_gain_total }}</td></tr>
+                                <tr><th>Budget</th><td>${{ options.budget }}</td></tr>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    {% elif options.strategy == 'Cash-Secured Put' %}
+                    <!-- Cash-Secured Put Strategy -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">📋 Trade Setup</h4>
+                            <table>
+                                <tr><th>Expiration</th><td>{{ options.expiration }} ({{ options.days_to_exp }} days)</td></tr>
+                                <tr><th>Strategy</th><td style="color: #00c853; font-weight: bold;">{{ options.strategy }}</td></tr>
+                                <tr>
+                                    <th>SELL Put</th>
+                                    <td style="color: #f44336;">
+                                        ${{ options.sell_strike }} @ ${{ options.sell_premium }}<br>
+                                        <span style="font-size: 11px; color: #888;">
+                                            Δ {{ options.sell_delta }} | Vol: {{ options.sell_volume }} | OI: {{ options.sell_oi }}
+                                            {% if options.sell_iv %}| IV: {{ options.sell_iv }}%{% endif %}
+                                        </span>
+                                    </td>
+                                </tr>
+                                <tr><th>Premium Collected</th><td style="color: #00c853; font-weight: bold;">${{ options.premium_collected }}</td></tr>
+                                <tr><th>Effective Entry</th><td>${{ options.effective_entry }}</td></tr>
+                                <tr><th>Breakeven</th><td>${{ options.breakeven }}</td></tr>
+                            </table>
+                        </div>
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">💰 Risk & Reward</h4>
+                            <table>
+                                <tr><th>Max Gain</th><td style="color: #00c853; font-weight: bold;">${{ options.max_gain_total }}</td></tr>
+                                <tr><th>Max Loss</th><td style="color: #f44336;">${{ options.max_loss_total }}</td></tr>
+                                <tr><th>Budget</th><td>${{ options.budget }}</td></tr>
+                            </table>
+                            <p style="font-size: 11px; color: #888; margin-top: 10px;">
+                                <strong>Note:</strong> Requires cash collateral of ${{ options.sell_strike * 100 }} per contract.
+                            </p>
+                        </div>
+                    </div>
+                    
+                    {% elif options.strategy == "Poor Man's Covered Call" %}
+                    <!-- PMCC Strategy -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">📋 Long Leg (LEAP)</h4>
+                            <table>
+                                <tr><th>Expiration</th><td>{{ options.long_expiration }} ({{ options.long_days_to_exp }} days)</td></tr>
+                                <tr>
+                                    <th>BUY Call</th>
+                                    <td style="color: #4caf50;">
+                                        ${{ options.buy_strike }} @ ${{ options.buy_premium }}<br>
+                                        <span style="font-size: 11px; color: #888;">
+                                            Δ {{ options.buy_delta }} | Vol: {{ options.buy_volume }} | OI: {{ options.buy_oi }}
+                                            {% if options.buy_iv %}| IV: {{ options.buy_iv }}%{% endif %}
+                                        </span>
+                                    </td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">📋 Short Leg</h4>
+                            <table>
+                                <tr><th>Expiration</th><td>{{ options.short_expiration }} ({{ options.short_days_to_exp }} days)</td></tr>
                                 <tr>
                                     <th>SELL Call</th>
                                     <td style="color: #f44336;">
@@ -3270,66 +3783,53 @@ def chart(symbol):
                                         </span>
                                     </td>
                                 </tr>
-                                <tr><th>Spread Width</th><td>${{ options.spread_width }}</td></tr>
-                                <tr><th>Net Debit</th><td style="font-weight: bold;">${{ options.net_debit }} per contract</td></tr>
                             </table>
                         </div>
-                        
-                        <!-- Position Sizing & P/L -->
                         <div>
-                            <h4 style="color: #00d4ff; margin-top: 0;">💰 Position & Risk</h4>
+                            <h4 style="color: #00d4ff; margin-top: 0;">💰 Position</h4>
                             <table>
-                                <tr><th>Budget</th><td>${{ options.budget }}</td></tr>
-                                <tr><th>Contracts</th><td style="font-weight: bold;">{{ options.contracts }}</td></tr>
+                                <tr><th>Net Debit</th><td style="font-weight: bold;">${{ options.net_debit }}</td></tr>
+                                <tr><th>Contracts</th><td>{{ options.contracts }}</td></tr>
                                 <tr><th>Total Cost</th><td style="color: #ff9800;">${{ options.total_cost }}</td></tr>
-                                <tr><th>Breakeven</th><td>${{ options.breakeven }} ({{ options.breakeven_move_pct }}% move needed)</td></tr>
-                                <tr><th>Max Gain</th><td style="color: #00c853; font-weight: bold;">${{ options.max_gain_total }}</td></tr>
+                                <tr><th>Max Gain</th><td style="color: #00c853;">${{ options.max_gain_total }}</td></tr>
                                 <tr><th>Max Loss</th><td style="color: #f44336;">${{ options.max_loss_total }}</td></tr>
-                                <tr><th>Risk/Reward</th><td>1:{{ options.rr_ratio }}</td></tr>
                             </table>
-                            {% if options.avg_iv %}
-                            <p style="font-size: 11px; color: #888; margin-top: 10px;">
-                                <strong>IV Assessment:</strong> {{ options.iv_assessment }}<br>
-                                Average IV: {{ options.avg_iv }}%
-                            </p>
-                            {% endif %}
-                        </div>
-                        
-                        <!-- Exit Rules -->
-                        <div>
-                            <h4 style="color: #00d4ff; margin-top: 0;">🎯 Exit Rules</h4>
-                            <table>
-                                <tr><th>50% Profit Target</th><td style="color: #8bc34a;">Close at ${{ options.profit_target_50 }}/spread</td></tr>
-                                <tr><th>100% Profit Target</th><td style="color: #00c853;">Close at ${{ options.profit_target_100 }}/spread</td></tr>
-                                <tr><th>Stop Loss</th><td style="color: #f44336;">Close at ${{ options.stop_loss_spread }}/spread (50% loss)</td></tr>
-                                {% if options.pattern_stop %}
-                                <tr><th>Pattern Stop</th><td style="color: #ff9800;">Close if stock drops below ${{ options.pattern_stop }}</td></tr>
-                                {% endif %}
-                                <tr><th>Time Stop</th><td>Exit {{ options.exit_days_before_exp }} days before expiration</td></tr>
-                            </table>
-                            
-                            <div style="margin-top: 15px; padding: 10px; background: #0f0f23; border-radius: 8px;">
-                                <strong style="color: {% if options.recommendation_strength == 'STRONG' %}#00c853{% elif options.recommendation_strength == 'MODERATE' %}#ff9800{% else %}#f44336{% endif %};">
-                                    {{ options.recommendation_strength }} SIGNAL
-                                </strong>
-                                <br>
-                                <span style="font-size: 12px; color: #888;">{{ options.size_recommendation }}</span>
-                            </div>
                         </div>
                     </div>
                     
-                    <!-- Entry Timing Rules -->
-                    <div style="margin-top: 15px; padding: 15px; background: #0f0f23; border-radius: 8px;">
-                        <h4 style="color: #00d4ff; margin: 0 0 10px 0;">⏰ Entry Timing Rules</h4>
-                        <ul style="margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.8;">
-                            <li><strong>Breakout Confirmation:</strong> Enter when price breaks above buy point (${{ analysis.buy_point if analysis else 'N/A' }}) with volume spike</li>
-                            <li><strong>RSI Check:</strong> Ideal entry when RSI is 50-70 (currently {{ analysis.rsi if analysis and analysis.rsi else 'N/A' }})</li>
-                            <li><strong>Volume:</strong> Wait for 2x+ average volume on breakout day (currently {{ analysis.volume_ratio if analysis else 'N/A' }}x)</li>
-                            {% if options.breakeven_move_pct > 5 %}
-                            <li style="color: #ff9800;">⚠️ <strong>Extended Stock Warning:</strong> Breakeven requires {{ options.breakeven_move_pct }}% move - consider waiting for pullback to handle</li>
-                            {% endif %}
-                        </ul>
+                    {% elif options.strategy == 'Iron Condor' %}
+                    <!-- Iron Condor Strategy -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">📋 Trade Setup</h4>
+                            <table>
+                                <tr><th>Expiration</th><td>{{ options.expiration }} ({{ options.days_to_exp }} days)</td></tr>
+                                <tr><th>Strategy</th><td style="color: #00c853; font-weight: bold;">{{ options.strategy }}</td></tr>
+                                <tr><th colspan="2" style="color: #4caf50; padding-top: 10px;">Call Spread</th></tr>
+                                <tr><th>SELL Call</th><td style="color: #f44336;">${{ options.short_call_strike }}</td></tr>
+                                <tr><th>BUY Call</th><td style="color: #4caf50;">${{ options.long_call_strike }}</td></tr>
+                                <tr><th colspan="2" style="color: #4caf50; padding-top: 10px;">Put Spread</th></tr>
+                                <tr><th>SELL Put</th><td style="color: #f44336;">${{ options.short_put_strike }}</td></tr>
+                                <tr><th>BUY Put</th><td style="color: #4caf50;">${{ options.long_put_strike }}</td></tr>
+                                <tr><th>Net Credit</th><td style="color: #00c853; font-weight: bold;">${{ options.net_credit }} per contract</td></tr>
+                            </table>
+                        </div>
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">💰 Risk & Reward</h4>
+                            <table>
+                                <tr><th>Contracts</th><td style="font-weight: bold;">{{ options.contracts }}</td></tr>
+                                <tr><th>Total Credit</th><td style="color: #00c853; font-weight: bold;">${{ options.total_credit }}</td></tr>
+                                <tr><th>Max Risk</th><td style="color: #f44336;">${{ options.max_risk }}</td></tr>
+                                <tr><th>Budget</th><td>${{ options.budget }}</td></tr>
+                            </table>
+                            <p style="font-size: 11px; color: #888; margin-top: 10px;">
+                                <strong>Profit Zone:</strong> Stock stays between ${{ options.short_put_strike }} and ${{ options.short_call_strike }} at expiration.
+                            </p>
+                        </div>
                     </div>
+                    {% endif %}
+                    
+                    {% if options.status == 'success' %}
                     
                     <!-- Budget Adjustment -->
                     <div style="margin-top: 10px;">
@@ -3342,6 +3842,8 @@ def chart(symbol):
                             <a class="btn" style="padding: 4px 10px; font-size: 11px;" href="/chart/{{ symbol }}?budget=1000&sma={{ show_smas|join(',') }}">$1000</a>
                         </form>
                     </div>
+                    {% endif %}
+                    {% endif %}
                     
                     {% elif options.status == 'no_options' or options.status == 'no_suitable_exp' %}
                     <p style="color: #ff9800;">⚠️ {{ options.message }}</p>
@@ -3356,6 +3858,82 @@ def chart(symbol):
                     {% endif %}
                     {% endif %}
                 </div>
+                
+                <!-- Expected Move Analysis -->
+                {% if expected_move.status == 'success' %}
+                <div class="card" style="grid-column: span 2;">
+                    <h3>📊 Expected Move Analysis</h3>
+                    <p style="color: #888; font-size: 12px; margin-bottom: 15px;">Based on {{ expected_move.iv }}% IV from {{ expected_move.expiration }} expiration ({{ expected_move.dte }} DTE)</p>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <!-- Expected Moves -->
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">📈 Expected Moves (±1 SD)</h4>
+                            <table>
+                                <tr><th>1-Week</th><td style="color: #00c853;">± ${{ expected_move.move_1w }}</td></tr>
+                                <tr><th>1-Month</th><td style="color: #00c853;">± ${{ expected_move.move_1m }}</td></tr>
+                                <tr><th>45-Day</th><td style="color: #00c853;">± ${{ expected_move.move_45d }}</td></tr>
+                            </table>
+                        </div>
+                        
+                        <!-- Pattern Target Comparison -->
+                        {% if expected_move.target_assessment %}
+                        <div>
+                            <h4 style="color: #00d4ff; margin-top: 0;">🎯 Pattern Target vs Expected Move</h4>
+                            <table>
+                                <tr><th>Pattern Target</th><td>${{ expected_move.target_assessment.target }} ({{ expected_move.target_assessment.target_pct }}% above)</td></tr>
+                                <tr><th>45-Day Upper Bound</th><td>${{ expected_move.target_assessment.upper_bound }} ({{ expected_move.target_assessment.upper_pct }}% above)</td></tr>
+                                <tr>
+                                    <th>Assessment</th>
+                                    <td style="color: {% if expected_move.target_assessment.assessment == 'WITHIN' %}#00c853{% else %}#ff9800{% endif %}; font-weight: bold;">
+                                        Target {{ expected_move.target_assessment.assessment }} expected move
+                                    </td>
+                                </tr>
+                            </table>
+                            {% if expected_move.target_assessment.note %}
+                            <p style="font-size: 11px; color: #ff9800; margin-top: 10px; padding: 8px; background: rgba(255,152,0,0.1); border-radius: 5px;">
+                                ⚠️ {{ expected_move.target_assessment.note }}
+                            </p>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    
+                    <!-- Delta-Based Probability Table -->
+                    {% if expected_move.delta_strikes %}
+                    <div style="margin-top: 20px;">
+                        <h4 style="color: #00d4ff; margin-top: 0;">🎲 Delta-to-Probability Translation</h4>
+                        <table style="width: 100%;">
+                            <thead>
+                                <tr style="background: #0a0a1a;">
+                                    <th>Delta</th>
+                                    <th>Strike</th>
+                                    <th>Prob OTM</th>
+                                    <th>Distance from Current</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in expected_move.delta_strikes %}
+                                <tr>
+                                    <td>{{ row.delta }}</td>
+                                    <td>${{ row.strike }}</td>
+                                    <td>{{ row.prob_otm }}%</td>
+                                    <td style="color: {% if row.distance_pct > 0 %}#00c853{% else %}#f44336{% endif %};">
+                                        {{ row.distance_pct }}%
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+                {% elif expected_move.status == 'no_data' %}
+                <div class="card" style="grid-column: span 2;">
+                    <h3>📊 Expected Move Analysis</h3>
+                    <p style="color: #888;">Expected move data unavailable — options chain not found for this ticker.</p>
+                </div>
+                {% endif %}
                 
                 <!-- Company Info -->
                 <div class="card">
@@ -3417,6 +3995,7 @@ def chart(symbol):
                                       show_smc=show_smc,
                                       options=options_strategy,
                                       options_budget=options_budget,
+                                      expected_move=expected_move,
                                       edgar_financials=edgar_financials)
 
     except Exception as e:
@@ -3498,14 +4077,17 @@ def tracked():
                     stock['current_price'] = round(hist['Close'].iloc[-1], 2)
                     stock['current_rsi'] = round(ta.rsi(hist['Close'], length=14).iloc[-1], 1) if len(hist) > 14 else None
                     stock['avg_volume'] = int(hist['Volume'].tail(50).mean())
+                    stock['current_volume'] = int(hist['Volume'].iloc[-1])  # Today's volume
                 else:
                     stock['current_price'] = None
                     stock['current_rsi'] = None
                     stock['avg_volume'] = None
+                    stock['current_volume'] = None
             except Exception as e:
                 stock['current_price'] = None
                 stock['current_rsi'] = None
                 stock['avg_volume'] = None
+                stock['current_volume'] = None
         html = """
         <html>
         <head>
@@ -3531,6 +4113,7 @@ def tracked():
                 .status { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
                 .status-active { background: #00c853; color: #000; }
                 .status-inactive { background: #f44336; }
+                th[title] { cursor: help; text-decoration: underline dotted; }
             </style>
         </head>
         <body>
@@ -3551,20 +4134,20 @@ def tracked():
             <table>
                 <tr>
                     <th>Ticker</th>
-                    <th>Buy Point</th>
-                    <th>RSI Range</th>
-                    <th>Volume Req</th>
-                    <th>Breakeven %</th>
+                    <th title="Ideal entry price based on pattern analysis">Buy Point</th>
+                    <th title="RSI range for optimal entry (typically 50-70)">RSI Range</th>
+                    <th title="Volume multiplier required for confirmation (e.g., 2x = double average volume)">Volume Req</th>
+                    <th title="Percentage move needed to cover typical spread/commission costs">Breakeven %</th>
                     <th>Added Date</th>
                     <th>Status</th>
                     <th>Actions</th>
                 </tr>
                 {% for track in tracks %}
-                <tr>
+                <tr {% if track['avg_volume'] and track['current_volume'] and track['current_volume'] >= (track['avg_volume'] * track['volume_multiple']) %}style="background: rgba(76, 175, 80, 0.2);"{% endif %}>
                     <td><a href="/chart/{{ track['ticker'] }}" style="color: #00d4ff;">{{ track['ticker'] }}</a></td>
                     <td>${{ track['buy_point'] }}{% if track['current_price'] %}<br><small style="color:#888;">(Curr: ${{ track['current_price'] }})</small>{% endif %}</td>
                     <td>{{ track['rsi_min'] }}-{{ track['rsi_max'] }}{% if track['current_rsi'] %}<br><small style="color:#888;">(Curr: {{ track['current_rsi'] }})</small>{% endif %}</td>
-                    <td>{{ track['volume_multiple'] }}x{% if track['avg_volume'] %}<br><small style="color:#888;">(Avg: {{ track['avg_volume']|round(0) }} req: {{ (track['avg_volume'] * track['volume_multiple']) |round(0) }})</small>{% endif %}</td>
+                    <td>{{ track['volume_multiple'] }}x{% if track['avg_volume'] %}<br><small style="color:{% if track['current_volume'] and track['current_volume'] >= (track['avg_volume'] * track['volume_multiple']) %}#4caf50{% else %}#888{% endif %};">(Avg: {{ track['avg_volume']|round(0) }} req: {{ (track['avg_volume'] * track['volume_multiple']) |round(0) }})</small>{% endif %}</td>
                     <td>{% if track['breakeven_move'] %}{{ track['breakeven_move'] }}%{% else %}-{% endif %}</td>
                     <td>{{ track['added_at'][:10] }}</td>
                     <td><span class="status status-active">Active</span></td>
@@ -3602,6 +4185,10 @@ def remove_tracked(ticker):
 try:
     from research_api import research_bp
     app.register_blueprint(research_bp)
+    
+    # Register journal blueprint
+    from journal.routes import journal_bp
+    app.register_blueprint(journal_bp)
     from research_dashboard import add_research_routes
     add_research_routes(app)
 except ImportError:

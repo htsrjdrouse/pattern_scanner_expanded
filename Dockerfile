@@ -22,6 +22,7 @@ COPY analytics.py .
 COPY sectors.json .
 COPY sector_scan.py .
 COPY data/ ./data/
+COPY journal/ ./journal/
 
 # Expose port
 EXPOSE 5002

@@ -11,3 +11,4 @@ gunicorn>=21.0
 edgartools
 pyrate-limiter
 schedule>=1.2.0
+sqlalchemy>=2.0

@@ -1,0 +1,92 @@
+feat: Add options trade tracking to trade journal
+
+Extends the trade journal to support options trades alongside stock trades,
+enabling comprehensive tracking of multi-leg strategies with IV and delta metrics.
+
+## Features Added
+
+### Database Schema Updates (models.py)
+- Added `trade_type` field: 'stock' or 'option'
+- New options-specific fields:
+  * `option_strategy`: long_call, cash_secured_put, pmcc, iron_condor, bull_call_spread, other
+  * `option_expiration`: Expiration date
+  * `option_strike`: Primary strike (or short strike for spreads)
+  * `option_strike_2`: Long strike for spreads (optional)
+  * `option_type`: call or put
+  * `option_dte`: Days to expiration at entry
+  * `option_iv`: Implied volatility at entry (%)
+  * `option_delta`: Delta at entry
+
+### P&L Calculation
+- Options P&L now correctly multiplies by 100 (contract multiplier)
+- Formula: `(exit_premium - entry_premium) * contracts * 100`
+- Stock P&L remains unchanged: `(exit_price - entry_price) * shares`
+
+### UI Enhancements (routes.py)
+- **Trade Type Selector**: Dropdown to choose Stock or Option
+- **Dynamic Form Fields**: 
+  * Labels change based on trade type
+  * "Shares" → "Contracts" for options
+  * "Entry Price" → "Entry Premium (per contract)" for options
+- **Collapsible Options Section**: 
+  * Hidden by default, appears when "Option" selected
+  * Includes all options-specific inputs
+  * JavaScript toggle for smooth UX
+
+### Options Form Fields
+- Strategy dropdown with common strategies
+- Expiration date picker
+- Strike price inputs (supports spreads with 2 strikes)
+- Option type (Call/Put)
+- DTE, IV, and Delta tracking
+- All fields optional to accommodate various strategies
+
+### Backup/Restore
+- Updated JSON backup to include all new options fields
+- Backward compatible with existing stock-only trades
+- Graceful handling of missing fields during restore
+
+## Usage
+
+1. Navigate to http://localhost:5002/journal/new
+2. Select "Option" from Trade Type dropdown
+3. Fill in standard trade details (symbol, date, contracts, premium)
+4. Options Details section appears automatically
+5. Enter strategy, strikes, expiration, IV, delta
+6. Save trade - P&L calculated correctly for options
+
+## Technical Details
+
+### Files Modified
+- `journal/models.py`:
+  * Lines 180-195: Added 8 new options fields to Trade model
+  * Lines 220-230: Updated compute_metrics() for options P&L
+  * Lines 18-70: Updated backup_to_json() with options fields
+  * Lines 72-130: Updated restore_from_json() with options fields
+
+- `journal/routes.py`:
+  * Lines 44-120: Updated new_trade() route to handle options
+  * Lines 454-650: Added options fields to NEW_TRADE_TEMPLATE
+  * Added toggleOptionsFields() JavaScript function
+
+- `README.md`: Updated Trade Journal feature description
+
+### Database Migration
+- New fields added with nullable=True for backward compatibility
+- Existing trades default to trade_type='stock'
+- No data loss on upgrade
+
+## Testing
+- Tested stock trade entry (existing functionality preserved)
+- Tested options trade entry with all fields
+- Tested P&L calculation for both trade types
+- Verified backup/restore with mixed trade types
+- Confirmed JavaScript toggle works across browsers
+
+## Future Enhancements
+- Dashboard display of options trades with strategy badges
+- Options-specific analytics (IV rank at entry vs exit, theta decay)
+- Multi-leg spread visualization
+- Options chain integration for auto-fill
+
+Closes #N/A
